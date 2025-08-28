@@ -4,14 +4,14 @@ set -e  # 出错立即退出
 cd /root
 
 echo "开始下载文件..."
-wget https://github.com/apool-io/apoolminer/releases/download/v3.2.1/apoolminer_linux_qubic_autoupdate_v3.2.1.tar.gz
+wget https://github.com/apool-io/apoolminer/releases/download/v3.2.2/apoolminer_linux_qubic_autoupdate_v3.2.2.tar.gz
 sleep 1
 
 echo "开始解压文件..."
-tar -xzvf apoolminer_linux_qubic_autoupdate_v3.2.1.tar.gz
+tar -xzvf apoolminer_linux_qubic_autoupdate_v3.2.2.tar.gz
 sleep 1
 
-cd apoolminer_linux_qubic_autoupdate_v3.2.1
+cd apoolminer_linux_qubic_autoupdate_v3.2.2
 sleep 1
 
 echo "修改权限..."
