@@ -44,19 +44,6 @@ sed -i "s/#gpu-off = true/$GPU_OFF/" miner.conf || echo "$GPU_OFF" >> miner.conf
 echo "启动 miner..."
 bash run.sh
 
-# ---------------- 循环检测进程 ----------------
-echo "等待 apoolminer 启动..."
-START_TIME=$(date +%s)
-TIMEOUT=30
-while ! pgrep -f apoolminer > /dev/null; do
-    sleep 1
-    NOW=$(date +%s)
-    if (( NOW - START_TIME > TIMEOUT )); then
-        echo "apoolminer 启动超时！"
-        exit 1
-    fi
-done
-echo "apoolminer 启动成功"
 
 # ---------------- 查看日志 ----------------
 echo "显示日志，按 Ctrl+C 退出..."
