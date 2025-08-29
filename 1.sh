@@ -2,15 +2,6 @@
 set -e  # 出错立即退出
 
 cd /root
-
-# ---------------- MSR 检查 ----------------
-echo "检测 MSR 模块..."
-if modprobe msr 2>/dev/null; then
-    echo "✅ MSR 模块已加载成功"
-else
-    echo "⚠ MSR 模块无法加载 (云服务器通常不支持)，忽略 WARN"
-fi
-
 # ---------------- 下载 & 解压 ----------------
 echo "开始下载文件..."
 wget https://github.com/apool-io/apoolminer/releases/download/v3.2.2/apoolminer_linux_qubic_autoupdate_v3.2.2.tar.gz
