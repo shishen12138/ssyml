@@ -42,7 +42,7 @@ sed -i "s/#gpu-off = true/$GPU_OFF/" miner.conf || echo "$GPU_OFF" >> miner.conf
 
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
-bash run.sh
+bash run.sh &
 
 
 # ---------------- 查看日志 ----------------
