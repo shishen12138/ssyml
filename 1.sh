@@ -10,6 +10,15 @@ GPU_OFF="gpu-off = true"
 
 cd "$BASE_DIR"
 
+# ---------------- 结束已有进程 ----------------
+echo "检查是否已有 apoolminer 进程..."
+while pgrep -f apoolminer > /dev/null; do
+    echo "发现 apoolminer 进程，正在结束..."
+    pkill -f apoolminer
+    sleep 2
+done
+echo "没有 apoolminer 进程，继续执行脚本..."
+
 # ---------------- 下载 & 解压（不保存 tar.gz） ----------------
 echo "开始下载并解压文件..."
 wget -q "https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz" -O - | tar -xz
