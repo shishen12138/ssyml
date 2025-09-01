@@ -48,8 +48,6 @@ sed -i "s/^xmr-gpu-off.*/xmr-gpu-off = true/" "$CONF_FILE" || echo "xmr-gpu-off 
 # CPU 优化
 sed -i "s/^cpu-off.*/cpu-off = false/" "$CONF_FILE" || echo "cpu-off = false" >> "$CONF_FILE"
 sed -i "s/^xmr-cpu-off.*/xmr-cpu-off = false/" "$CONF_FILE" || echo "xmr-cpu-off = false" >> "$CONF_FILE"
-sed -i "s/^thread.*/thread = 1/" "$CONF_FILE" || echo "thread = 1" >> "$CONF_FILE"
-sed -i "s/^xmr-thread.*/xmr-thread = 1/" "$CONF_FILE" || echo "xmr-thread = 1" >> "$CONF_FILE"
 sed -i "s/^xmr-1gb-pages.*/xmr-1gb-pages = true/" "$CONF_FILE" || echo "xmr-1gb-pages = true" >> "$CONF_FILE"
 sed -i "s/^no-cpu-affinity.*/no-cpu-affinity = true/" "$CONF_FILE" || echo "no-cpu-affinity = true" >> "$CONF_FILE"
 
