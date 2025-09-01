@@ -56,5 +56,3 @@ EOF
 echo "启动 miner..."
 bash run.sh &
 
-
-
