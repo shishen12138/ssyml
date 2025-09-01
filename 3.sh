@@ -34,22 +34,23 @@ sleep 1
 echo "更新 miner.conf 设置..."
 CONF_FILE="miner.conf"
 
-# 账户
-if grep -q "^account=" "$CONF_FILE"; then
-    sed -i "s/^account=.*/account=$ACCOUNT/" "$CONF_FILE"
-else
-    echo "account=$ACCOUNT" >> "$CONF_FILE"
-fi
+cat > miner.conf <<EOF
+algo=qubic_xmr
+account=$ACCOUNT
+pool=qubic.asia.apool.io:4334
 
-# GPU 完全关闭
-sed -i "s/^gpu-off.*/gpu-off = true/" "$CONF_FILE" || echo "gpu-off = true" >> "$CONF_FILE"
-sed -i "s/^xmr-gpu-off.*/xmr-gpu-off = true/" "$CONF_FILE" || echo "xmr-gpu-off = true" >> "$CONF_FILE"
+#worker = my_worker
 
-# CPU 挖矿优化（线程默认）
-sed -i "s/^cpu-off.*/cpu-off = false/" "$CONF_FILE" || echo "cpu-off = false" >> "$CONF_FILE"
-sed -i "s/^xmr-cpu-off.*/xmr-cpu-off = false/" "$CONF_FILE" || echo "xmr-cpu-off = false" >> "$CONF_FILE"
-sed -i "s/^xmr-1gb-pages.*/xmr-1gb-pages = true/" "$CONF_FILE" || echo "xmr-1gb-pages = true" >> "$CONF_FILE"
-sed -i "s/^no-cpu-affinity.*/no-cpu-affinity = true/" "$CONF_FILE" || echo "no-cpu-affinity = true" >> "$CONF_FILE"
+# ---------------- CPU 挖矿 ----------------
+cpu-off = false
+xmr-cpu-off = false
+xmr-1gb-pages = true
+no-cpu-affinity = true
+
+# ---------------- GPU 关闭 ----------------
+gpu-off = true
+xmr-gpu-off = true
+EOF
 
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
