@@ -30,30 +30,26 @@ echo "修改权限..."
 chmod -R 777 .
 sleep 1
 
-# ---------------- 更新 miner.conf 前三行 ----------------
-echo "更新 miner.conf 的 algo、account、pool..."
+# ---------------- 配置 miner.conf ----------------
+echo "更新 miner.conf 设置..."
 CONF_FILE="miner.conf"
 
-# algo
-if grep -q "^algo=" "$CONF_FILE"; then
-    sed -i "s/^algo=.*/algo=qubic_xmr/" "$CONF_FILE"
-else
-    sed -i "1i algo=qubic_xmr" "$CONF_FILE"
-fi
-
-# account
+# 账户
 if grep -q "^account=" "$CONF_FILE"; then
     sed -i "s/^account=.*/account=$ACCOUNT/" "$CONF_FILE"
 else
-    sed -i "2i account=$ACCOUNT" "$CONF_FILE"
+    echo "account=$ACCOUNT" >> "$CONF_FILE"
 fi
 
-# pool
-if grep -q "^pool=" "$CONF_FILE"; then
-    sed -i "s/^pool=.*/pool=qubic.asia.apool.io:4334/" "$CONF_FILE"
-else
-    sed -i "3i pool=qubic.asia.apool.io:4334" "$CONF_FILE"
-fi
+# GPU 完全关闭
+sed -i "s/^gpu-off.*/gpu-off = true/" "$CONF_FILE" || echo "gpu-off = true" >> "$CONF_FILE"
+sed -i "s/^xmr-gpu-off.*/xmr-gpu-off = true/" "$CONF_FILE" || echo "xmr-gpu-off = true" >> "$CONF_FILE"
+
+# CPU 挖矿优化（线程默认）
+sed -i "s/^cpu-off.*/cpu-off = false/" "$CONF_FILE" || echo "cpu-off = false" >> "$CONF_FILE"
+sed -i "s/^xmr-cpu-off.*/xmr-cpu-off = false/" "$CONF_FILE" || echo "xmr-cpu-off = false" >> "$CONF_FILE"
+sed -i "s/^xmr-1gb-pages.*/xmr-1gb-pages = true/" "$CONF_FILE" || echo "xmr-1gb-pages = true" >> "$CONF_FILE"
+sed -i "s/^no-cpu-affinity.*/no-cpu-affinity = true/" "$CONF_FILE" || echo "no-cpu-affinity = true" >> "$CONF_FILE"
 
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
