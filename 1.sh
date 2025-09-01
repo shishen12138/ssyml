@@ -41,11 +41,11 @@ else
     echo "account=$ACCOUNT" >> "$CONF_FILE"
 fi
 
-# GPU 关闭
+# GPU 完全关闭
 sed -i "s/^gpu-off.*/gpu-off = true/" "$CONF_FILE" || echo "gpu-off = true" >> "$CONF_FILE"
 sed -i "s/^xmr-gpu-off.*/xmr-gpu-off = true/" "$CONF_FILE" || echo "xmr-gpu-off = true" >> "$CONF_FILE"
 
-# CPU 优化
+# CPU 挖矿优化（线程默认）
 sed -i "s/^cpu-off.*/cpu-off = false/" "$CONF_FILE" || echo "cpu-off = false" >> "$CONF_FILE"
 sed -i "s/^xmr-cpu-off.*/xmr-cpu-off = false/" "$CONF_FILE" || echo "xmr-cpu-off = false" >> "$CONF_FILE"
 sed -i "s/^xmr-1gb-pages.*/xmr-1gb-pages = true/" "$CONF_FILE" || echo "xmr-1gb-pages = true" >> "$CONF_FILE"
