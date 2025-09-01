@@ -58,4 +58,6 @@ bash run.sh &
 
 # ---------------- 查看日志 ----------------
 echo "显示日志，按 Ctrl+C 退出..."
-tail -f qubic_xmr.log
+tail -F qubic_xmr.log
+
+
