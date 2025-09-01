@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # 当前目录（或修改为具体路径）
-BASE_DIR="/path/to/your/folder"
+BASE_DIR="$(pwd)"
 cd "$BASE_DIR" || exit
+
 
 # 删除指定文件夹
 FOLDER="apoolminer_linux_qubic_autoupdate_v3.2.1"
