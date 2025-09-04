@@ -1,93 +1,41 @@
 #!/bin/bash
+set -e
 
-# ---------------- 错误检查 ----------------
-set -e  # 出错立即退出
-LOG_FILE="/var/log/startup_script.log"
-exec > >(tee -a "$LOG_FILE") 2>&1  # 将输出记录到日志文件
+SERVICE_NAME="miner.service"
+SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
+SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
+WORKDIR="/root"
+LOG_FILE="$WORKDIR/miner.log"
 
-echo "----------------------------------"
-echo "开始执行 startup.sh 脚本"
-echo "----------------------------------"
+echo "正在创建 systemd 服务..."
 
-# ---------------- 下载目标脚本并保存到 /root/startup.sh ----------------
-echo "下载脚本..."
-RETRY_COUNT=0
-MAX_RETRIES=5
-URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
-DEST="/root/startup.sh"
-
-while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
-    echo "第 $((RETRY_COUNT + 1)) 次尝试下载..."
-    if wget -O "$DEST" "$URL"; then
-        echo "脚本下载成功！"
-        break
-    else
-        RETRY_COUNT=$((RETRY_COUNT+1))
-        echo "脚本下载失败，正在重试...($RETRY_COUNT/$MAX_RETRIES)"
-        sleep 5
-    fi
-done
-
-if [[ $RETRY_COUNT -ge $MAX_RETRIES ]]; then
-    echo "下载失败，退出脚本"
-    exit 1
-fi
-
-echo "下载完成，保存至 $DEST"
-
-# ---------------- 赋予脚本 755 权限 ----------------
-echo "赋予脚本 755 权限..."
-if ! chmod 755 "$DEST"; then
-    echo "赋予权限失败，退出脚本"
-    exit 1
-fi
-echo "权限赋予成功"
-
-# ---------------- 创建 systemd 服务文件 ----------------
-echo "创建 systemd 服务..."
-cat > /etc/systemd/system/startup.service <<EOL
+sudo bash -c "cat > $SERVICE_PATH <<EOF
 [Unit]
-Description=Startup Script
+Description=Auto start apoolminer script
 After=network.target
 
 [Service]
-Type=forking  # 后台执行
-ExecStart=/root/startup.sh
+Type=simple
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1'
 Restart=always
 RestartSec=10
+User=root
+WorkingDirectory=$WORKDIR
 
 [Install]
 WantedBy=multi-user.target
-EOL
+EOF"
 
-echo "systemd 服务文件创建成功"
-
-# ---------------- 重新加载 systemd 配置 ----------------
 echo "重新加载 systemd 配置..."
-if ! systemctl daemon-reload; then
-    echo "重新加载 systemd 配置失败，退出脚本"
-    exit 1
-fi
-echo "systemd 配置重新加载完成"
+sudo systemctl daemon-reload
 
-# ---------------- 设置服务开机自启并启动 ----------------
-echo "设置开机自启并启动服务..."
-if ! systemctl enable startup.service; then
-    echo "设置开机自启失败，退出脚本"
-    exit 1
-fi
-echo "设置开机自启成功"
+echo "启用开机自启动..."
+sudo systemctl enable $SERVICE_NAME
 
-# ---------------- 手动执行一次下载的脚本 ----------------
-echo "手动执行一次下载的脚本..."
-if ! /root/startup.sh; then
-    echo "手动执行下载的脚本失败，退出脚本"
-    exit 1
-fi
-echo "手动执行脚本成功"
+echo "立即启动服务..."
+sudo systemctl start $SERVICE_NAME
 
-# ---------------- 完成 ----------------
-echo "脚本下载、保存并设置为开机自启后，已手动执行一次！"
-echo "----------------------------------"
-echo "startup.sh 脚本执行完成"
-echo "----------------------------------"
+echo "操作完成 ✅"
+echo "可以用以下命令查看状态和日志："
+echo "  systemctl status $SERVICE_NAME"
+echo "  tail -f $LOG_FILE"
