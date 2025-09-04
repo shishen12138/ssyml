@@ -6,6 +6,8 @@ BASE_DIR="/root"
 MINER_VERSION="v3.2.2"
 MINER_DIR="apoolminer_linux_qubic_autoupdate_${MINER_VERSION}"
 ACCOUNT="CP_qcy"
+DOWNLOAD_URL="https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
+TAR_FILE="apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
 
 cd "$BASE_DIR"
 
@@ -43,15 +45,30 @@ RETRY_COUNT=0
 MAX_RETRIES=5
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    wget -q "https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz" -O - | tar -xz
-    if [ $? -eq 0 ]; then
-        echo "下载并解压完成"
-        break
+    # 下载压缩包
+    wget -q "$DOWNLOAD_URL" -O "$TAR_FILE"
+    
+    # 检查文件是否下载成功并且大小是否合理
+    if [ $? -eq 0 ] && [ -s "$TAR_FILE" ]; then
+        # 检查压缩包是否完整（可以尝试解压检查）
+        echo "压缩包下载完成，正在检查..."
+        tar -tzf "$TAR_FILE" > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            echo "压缩包验证通过，开始解压..."
+            tar -xz -f "$TAR_FILE"
+            echo "下载并解压完成"
+            break
+        else
+            echo "压缩包损坏，重新下载..."
+            rm -f "$TAR_FILE"  # 删除损坏的文件
+        fi
     else
-        RETRY_COUNT=$((RETRY_COUNT + 1))
         echo "下载失败，正在重试... (尝试次数：$RETRY_COUNT)"
-        sleep 5  # 等待5秒再重试
+        rm -f "$TAR_FILE"  # 删除不完整的文件
     fi
+    
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    sleep 5  # 等待5秒再重试
 done
 
 if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
