@@ -35,9 +35,9 @@ fi
 
 echo "下载完成，保存至 $DEST"
 
-# ---------------- 赋予脚本 777 权限 ----------------
-echo "赋予脚本 777 权限..."
-if ! chmod 777 "$DEST"; then
+# ---------------- 赋予脚本 755 权限 ----------------
+echo "赋予脚本 755 权限..."
+if ! chmod 755 "$DEST"; then
     echo "赋予权限失败，退出脚本"
     exit 1
 fi
@@ -51,9 +51,11 @@ Description=Startup Script
 After=network.target
 
 [Service]
-Type=simple
+Type=forking  # 后台执行
 ExecStart=/root/startup.sh
-Restart=on-failure
+ExecStartPost=/root/startup.sh &  # 后台启动 miner
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -85,9 +87,10 @@ Description=Startup Script with Delay
 After=network.target
 
 [Service]
-Type=simple
+Type=forking  # 后台执行
 ExecStart=/root/startup.sh
-Restart=on-failure
+ExecStartPost=/root/startup.sh &  # 后台启动 miner
+Restart=always
 ExecStartPre=/bin/sleep 30
 
 [Install]
