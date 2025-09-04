@@ -53,7 +53,6 @@ After=network.target
 [Service]
 Type=forking  # 后台执行
 ExecStart=/root/startup.sh
-ExecStartPost=/root/startup.sh &  # 后台启动 miner
 Restart=always
 RestartSec=10
 
@@ -79,47 +78,6 @@ if ! systemctl enable startup.service; then
 fi
 echo "设置开机自启成功"
 
-# ---------------- 延时30秒后执行脚本 ----------------
-echo "设置延时30秒后执行脚本..."
-cat > /etc/systemd/system/startup-delay.service <<EOL
-[Unit]
-Description=Startup Script with Delay
-After=network.target
-
-[Service]
-Type=forking  # 后台执行
-ExecStart=/root/startup.sh
-ExecStartPost=/root/startup.sh &  # 后台启动 miner
-Restart=always
-ExecStartPre=/bin/sleep 30
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-echo "延时服务文件创建完成"
-
-# ---------------- 重新加载 systemd 配置 ----------------
-echo "重新加载 systemd 配置..."
-if ! systemctl daemon-reload; then
-    echo "重新加载 systemd 配置失败，退出脚本"
-    exit 1
-fi
-echo "systemd 配置重新加载完成"
-
-# ---------------- 设置服务开机自启并启动 ----------------
-echo "设置开机自启并启动延时服务..."
-if ! systemctl enable startup-delay.service; then
-    echo "设置开机自启失败，退出脚本"
-    exit 1
-fi
-
-if ! systemctl start startup-delay.service; then
-    echo "启动延时服务失败，退出脚本"
-    exit 1
-fi
-echo "延时服务启动成功"
-
 # ---------------- 手动执行一次下载的脚本 ----------------
 echo "手动执行一次下载的脚本..."
 if ! /root/startup.sh; then
@@ -129,7 +87,7 @@ fi
 echo "手动执行脚本成功"
 
 # ---------------- 完成 ----------------
-echo "脚本下载、保存并设置为开机自启后，已设置延时执行并手动执行了一次！"
+echo "脚本下载、保存并设置为开机自启后，已手动执行一次！"
 echo "----------------------------------"
 echo "startup.sh 脚本执行完成"
 echo "----------------------------------"
