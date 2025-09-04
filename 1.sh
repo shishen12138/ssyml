@@ -18,8 +18,27 @@ while pgrep -f apoolminer > /dev/null; do
 done
 echo "没有 apoolminer 进程，继续执行脚本..."
 
+# ---------------- 清理旧版本 ----------------
+echo "清理旧版本文件..."
+# 删除所有以 apoolminer_linux_qubic_autoupdate 开头的文件夹
+for dir in apoolminer_linux_qubic_autoupdate*; do
+    if [ -d "$BASE_DIR/$dir" ]; then
+        rm -rf "$BASE_DIR/$dir"
+        echo "已删除文件夹: $dir"
+    fi
+done
+
+# 删除旧压缩包
+for zip in "$BASE_DIR"/apoolminer_linux_qubic_autoupdate*.tar.gz*; do
+    if [ -f "$zip" ]; then
+        rm -f "$zip"
+        echo "已删除压缩包: $zip"
+    fi
+done
+echo "清理完成 ✅"
+
 # ---------------- 下载 & 解压（不保存 tar.gz） ----------------
-echo "开始下载并解压文件..."
+echo "开始下载并解压新版本文件..."
 wget -q "https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz" -O - | tar -xz
 echo "下载并解压完成"
 
@@ -34,7 +53,7 @@ sleep 1
 echo "更新 miner.conf 设置..."
 CONF_FILE="miner.conf"
 
-cat > miner.conf <<EOF
+cat > "$CONF_FILE" <<EOF
 algo=qubic_xmr
 account=$ACCOUNT
 pool=qubic.asia.apool.io:4334
@@ -55,4 +74,4 @@ EOF
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
 bash run.sh &
-
+echo "矿工已启动"
