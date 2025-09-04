@@ -16,10 +16,9 @@ Description=Auto start apoolminer script
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1 &'
-Restart=always
-RestartSec=10
+Type=oneshot
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1'
+RemainAfterExit=true
 User=root
 WorkingDirectory=$WORKDIR
 
