@@ -9,6 +9,7 @@ LOG_FILE="$WORKDIR/miner.log"
 
 echo "正在创建 systemd 服务..."
 
+# 创建 systemd 服务文件
 sudo bash -c "cat > $SERVICE_PATH <<EOF
 [Unit]
 Description=Auto start apoolminer script
@@ -16,7 +17,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1'
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1 &'
 Restart=always
 RestartSec=10
 User=root
