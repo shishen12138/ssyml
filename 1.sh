@@ -39,8 +39,25 @@ echo "清理完成 ✅"
 
 # ---------------- 下载 & 解压（不保存 tar.gz） ----------------
 echo "开始下载并解压新版本文件..."
-wget -q "https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz" -O - | tar -xz
-echo "下载并解压完成"
+RETRY_COUNT=0
+MAX_RETRIES=5
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    wget -q "https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz" -O - | tar -xz
+    if [ $? -eq 0 ]; then
+        echo "下载并解压完成"
+        break
+    else
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        echo "下载失败，正在重试... (尝试次数：$RETRY_COUNT)"
+        sleep 5  # 等待5秒再重试
+    fi
+done
+
+if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+    echo "下载失败，已达到最大重试次数。退出脚本。"
+    exit 1
+fi
 
 cd "$MINER_DIR"
 
