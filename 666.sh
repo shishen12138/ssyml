@@ -17,7 +17,7 @@ done
 
 # 下载 templates/index.html
 mkdir -p templates
-curl -fsSL "$BASE_URL/index_ws.html" -o templates/index.html || { echo "下载 templates/index.html 失败"; exit 1; }
+curl -fsSL "$BASE_URL/index_ws.html" -o templates/index_ws.html || { echo "下载 templates/index.html 失败"; exit 1; }
 
 # ---------- 3. 设置权限 ----------
 chmod 755 deploy_ssh_panel_config.sh
