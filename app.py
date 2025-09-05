@@ -44,7 +44,7 @@ async def async_ssh_connect(host):
             username=host.get('username', 'root'),
             password=host.get('password', ''),
             known_hosts=None,
-            timeout=5
+            connect_timeout=5
         )
         cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
         memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
