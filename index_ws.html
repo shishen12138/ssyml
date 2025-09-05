@@ -63,7 +63,7 @@
 
 <script>
 var socket = io();
-var hostsData = {};
+var hostsData = {}; // 保存最新状态
 
 // ---------- 接收主机状态 ----------
 socket.on('status', function(data){
@@ -78,15 +78,11 @@ socket.on('status', function(data){
             <td>${ip}</td>
             <td>
                 ${h.cpu !== '-' ? h.cpu + '%' : '-'}
-                <div class="progress mt-1">
-                    <div class="progress-bar bg-success" role="progressbar" style="width:${h.cpu !== '-' ? h.cpu : 0}%"></div>
-                </div>
+                <div class="progress mt-1"><div class="progress-bar bg-success" role="progressbar" style="width:${h.cpu !== '-' ? h.cpu : 0}%"></div></div>
             </td>
             <td>
                 ${h.memory !== '-' ? h.memory + '%' : '-'}
-                <div class="progress mt-1">
-                    <div class="progress-bar bg-info" role="progressbar" style="width:${h.memory !== '-' ? h.memory : 0}%"></div>
-                </div>
+                <div class="progress mt-1"><div class="progress-bar bg-info" role="progressbar" style="width:${h.memory !== '-' ? h.memory : 0}%"></div></div>
             </td>
             <td>${h.net_rx || 0}/${h.net_tx || 0}</td>
             <td>${h.latency || '-'}</td>
@@ -151,8 +147,7 @@ function importAWS(){
     fetch('/import_aws', {method:'POST', body: formData})
     .then(res => res.json())
     .then(res => {
-        alert('导入 AWS 任务已启动，查看面板日志');
-        socket.emit('refresh_hosts');
+        alert('导入开始，请查看日志获取进度...');
     });
 }
 
