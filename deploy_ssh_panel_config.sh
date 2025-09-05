@@ -26,12 +26,28 @@ echo "系统类型：$OS"
 # ---------- 安装系统依赖 ----------
 install_system_packages() {
     echo "检查并安装系统依赖..."
-    packages=("python3" "python3-pip" "ifstat" "net-tools" "awk" "procps" "curl" "wget")
+    packages=("ifstat" "net-tools" "awk" "procps" "curl" "wget" "python3-pip")
+
     for pkg in "${packages[@]}"; do
-        if ! command -v $pkg >/dev/null 2>&1; then
+        case $pkg in
+            net-tools)
+                check_cmd="ifconfig"
+                ;;
+            procps)
+                check_cmd="ps"
+                ;;
+            python3-pip)
+                check_cmd="pip3"
+                ;;
+            *)
+                check_cmd=$pkg
+                ;;
+        esac
+
+        if ! command -v $check_cmd >/dev/null 2>&1; then
             echo "$pkg 未安装，正在安装..."
             if [ "$OS" == "debian" ]; then
-                sudo apt update && sudo apt install -y $pkg
+                sudo apt update -y && sudo apt install -y $pkg
             else
                 sudo yum install -y $pkg
             fi
@@ -46,35 +62,34 @@ install_python() {
     if ! command -v python3 >/dev/null 2>&1; then
         echo "未检测到 Python3，正在安装..."
         if [ "$OS" == "debian" ]; then
-            sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+            sudo apt update -y && sudo apt install -y python3 python3-venv python3-pip
         else
             sudo yum install -y python3 python3-pip
         fi
     else
         echo "Python3 已安装"
     fi
+
+    # 修复 pip3 路径问题
+    if ! command -v pip3 >/dev/null 2>&1; then
+        if [ -x "/usr/bin/pip3" ]; then
+            sudo ln -sf /usr/bin/pip3 /usr/local/bin/pip3
+        elif [ -x "/usr/bin/pip" ]; then
+            sudo ln -sf /usr/bin/pip /usr/local/bin/pip3
+        fi
+    fi
+    if command -v pip3 >/dev/null 2>&1; then
+        echo "pip3 已安装: $(pip3 --version)"
+    else
+        echo "pip3 仍未找到，请手动检查 python3-pip 安装"
+    fi
 }
 
 # ---------- 安装 Python 库 ----------
 install_python_packages() {
     echo "安装 Python 库..."
-
-    if [ "$OS" == "debian" ]; then
-        # 先尝试 apt 安装
-        sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests || true
-    fi
-
-    # 检查是否缺包
-    missing=false
-    for pkg in flask paramiko boto3 requests; do
-        python3 -c "import $pkg" 2>/dev/null || missing=true
-    done
-
-    if [ "$missing" = true ]; then
-        echo "部分库缺失，使用 pip 安装..."
-        pip3 install --upgrade pip --break-system-packages
-        pip3 install flask paramiko boto3 requests --break-system-packages
-    fi
+    pip3 install --upgrade pip --break-system-packages
+    pip3 install flask paramiko boto3 requests --break-system-packages
 }
 
 # ---------- 创建日志文件 ----------
