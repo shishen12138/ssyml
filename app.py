@@ -170,7 +170,7 @@ def add_host():
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', 'Qcy1994@06')  # 默认密码
+    password = request.form.get('password', 'Qcy1994@06')
     hosts.append({
         "ip": ip,
         "port": port,
@@ -179,7 +179,7 @@ def add_host():
         "source": "manual"
     })
     save_hosts(hosts)
-    socketio.emit('status', {ip: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['手动添加主机'],'error':''}})
+    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
     return jsonify({"status":"ok"})
 
 @app.route('/import_aws', methods=['POST'])
@@ -200,8 +200,11 @@ def import_aws():
     ]
 
     new_hosts = []
-    for access_key, secret_key in accounts:
+    for idx, (access_key, secret_key) in enumerate(accounts, 1):
+        socketio.emit('log', {'msg': f"[AWS] 开始导入账号 {idx}/{len(accounts)}..."})
         for region in ALL_REGIONS:
+            socketio.emit('log', {'msg': f"[AWS] 连接区域 {region} ..."})
+
             try:
                 ec2 = boto3.client(
                     'ec2',
@@ -210,6 +213,8 @@ def import_aws():
                     region_name=region
                 )
                 reservations = ec2.describe_instances().get('Reservations', [])
+                socketio.emit('log', {'msg': f"[AWS] 区域 {region} 共 {len(reservations)} 个预订..."})
+
                 for res in reservations:
                     for inst in res.get('Instances', []):
                         ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
@@ -218,17 +223,19 @@ def import_aws():
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
-                                "password": "Qcy1994@06",  # 默认密码
+                                "password": "Qcy1994@06",
                                 "region": region,
                                 "source": "aws"
                             }
                             hosts.append(host_info)
                             new_hosts.append(host_info)
+                            socketio.emit('log', {'msg': f"[AWS] 添加实例 {ip} 到面板"})
             except Exception as e:
-                print(f"[{region}] AWS Error: {e}")
+                socketio.emit('log', {'msg': f"[AWS] 区域 {region} 错误: {e}"})
 
     save_hosts(hosts)
-    socketio.emit('status', {h['ip']: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['AWS 主机导入'],'error':''} for h in new_hosts})
+    socketio.emit('status', {h['ip']: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['AWS 主机导入'], 'error':''} for h in new_hosts})
+    socketio.emit('log', {'msg': f"[AWS] 导入完成，共添加 {len(new_hosts)} 台主机"})
     return jsonify({"status":"ok","added":len(new_hosts)})
 
 @app.route('/log')
@@ -241,7 +248,7 @@ def log():
 
 @app.route('/')
 def index():
-    return render_template('index_ws.html')  # WebSocket 前端页面
+    return render_template('index_ws.html')
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
