@@ -3,11 +3,11 @@ from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import asyncio
 import asyncssh
-import boto3
 import json
 import os
 import eventlet
 import threading
+import subprocess
 
 eventlet.monkey_patch()  # async 与 Flask-SocketIO 兼容
 
@@ -76,24 +76,6 @@ async def async_ssh_connect(host):
         result['error'] = str(e)
     return result
 
-async def async_exec_command(host, cmd):
-    try:
-        conn = await asyncssh.connect(
-            host['ip'],
-            port=host.get('port', 22),
-            username=host.get('username', 'root'),
-            password=host.get('password', ''),
-            known_hosts=None,
-            connect_timeout=5
-        )
-        process = await conn.create_process(cmd)
-        out = await process.stdout.read()
-        err = await process.stderr.read()
-        conn.close()
-        return out + err
-    except Exception as e:
-        return str(e)
-
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
     global status_loop_started
@@ -102,28 +84,27 @@ def start_status_loop():
             return
         status_loop_started = True
 
-    async def get_status_batch(host_batch):
-        tasks = [async_ssh_connect(h) for h in host_batch]
-        results = await asyncio.gather(*tasks)
-        return {h['ip']: r for h, r in zip(host_batch, results)}
+    BATCH_SIZE = 5  # 每批主机数，可调
+
+    async def worker_loop():
+        while True:
+            if not connected_clients:
+                await asyncio.sleep(1)
+                continue
+
+            hosts = load_hosts()
+            for i in range(0, len(hosts), BATCH_SIZE):
+                batch = hosts[i:i+BATCH_SIZE]
+                tasks = [async_ssh_connect(h) for h in batch]
+                results = await asyncio.gather(*tasks)
+                for h, r in zip(batch, results):
+                    socketio.emit('status', {h['ip']: r})
+            await asyncio.sleep(REFRESH_INTERVAL_DEFAULT)
 
     def loop_func():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        BATCH_SIZE = 10
-        while True:
-            if not connected_clients:
-                eventlet.sleep(1)
-                continue
-            hosts = load_hosts()
-            for i in range(0, len(hosts), BATCH_SIZE):
-                batch = hosts[i:i+BATCH_SIZE]
-                try:
-                    data = loop.run_until_complete(get_status_batch(batch))
-                    socketio.emit('status', data)
-                except Exception as e:
-                    socketio.emit('log', {'msg': f"获取状态错误: {e}"})
-            eventlet.sleep(REFRESH_INTERVAL_DEFAULT)
+        loop.run_until_complete(worker_loop())
 
     eventlet.spawn(loop_func)
 
@@ -146,8 +127,9 @@ def handle_exec_command(data):
     selected_hosts = [h for h in hosts if h['ip'] in ips]
 
     async def send_cmd_batch(batch):
-        results = await asyncio.gather(*(async_exec_command(h, cmd) for h in batch))
-        socketio.emit('cmd_result', {h['ip']: r for h, r in zip(batch, results)})
+        results = await asyncio.gather(*(async_ssh_connect(h) for h in batch))
+        for h, r in zip(batch, results):
+            socketio.emit('cmd_result', {h['ip']: r})
 
     def thread_func():
         loop = asyncio.new_event_loop()
@@ -164,69 +146,15 @@ def handle_exec_command(data):
 
 # -------------------- AWS 导入 --------------------
 @app.route('/import_aws', methods=['POST'])
-def import_aws():
-    hosts = load_hosts()
-    accounts_raw = request.form['accounts']
+def import_aws_route():
+    accounts_file = '/tmp/aws_accounts.txt'
+    with open(accounts_file, 'w') as f:
+        f.write(request.form['accounts'])
 
-    def import_thread():
-        new_hosts = []
-        accounts = []
-        for line in accounts_raw.splitlines():
-            parts = line.strip().split('----')
-            if len(parts) >= 3:
-                accounts.append((parts[1].strip(), parts[2].strip()))
+    # 调用独立 AWS 导入脚本，不在 Flask 线程中执行
+    subprocess.Popen(['python3', '/root/ssh_panel/aws_importer.py', accounts_file])
 
-        socketio.emit('log', {'msg': f"开始导入 AWS 账号，总账号数 {len(accounts)}"})
-
-        for i in range(0, len(accounts), 5):
-            batch_accounts = accounts[i:i+5]
-            for idx, (access_key, secret_key) in enumerate(batch_accounts, start=i+1):
-                socketio.emit('log', {'msg': f"开始处理账号 {idx}"})
-                session = boto3.Session(
-                    aws_access_key_id=access_key,
-                    aws_secret_access_key=secret_key
-                )
-                try:
-                    ec2_client = session.client('ec2', region_name='us-east-1')
-                    regions_resp = ec2_client.describe_regions()['Regions']
-                    all_regions = [r['RegionName'] for r in regions_resp]
-                except Exception as e:
-                    socketio.emit('log', {'msg': f"账号 {idx} 获取区域失败: {e}"})
-                    continue
-
-                # 分批处理区域
-                for j in range(0, len(all_regions), 5):
-                    region_batch = all_regions[j:j+5]
-                    for region in region_batch:
-                        socketio.emit('log', {'msg': f"账号 {idx} 连接区域: {region}"})
-                        try:
-                            ec2 = session.client('ec2', region_name=region)
-                            paginator = ec2.get_paginator('describe_instances')
-                            for page in paginator.paginate():
-                                for res in page.get('Reservations', []):
-                                    for inst in res.get('Instances', []):
-                                        ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                                        if ip:
-                                            host_info = {
-                                                "ip": ip,
-                                                "port": 22,
-                                                "username": "root",
-                                                "password": "Qcy1994@06",
-                                                "region": region,
-                                                "source": "aws"
-                                            }
-                                            hosts.append(host_info)
-                                            new_hosts.append(host_info)
-                                            socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 添加实例 {ip}"})
-                        except Exception as e:
-                            socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 出现错误: {e}"})
-
-        save_hosts(hosts)
-        socketio.emit('log', {'msg': f"AWS 导入完成，共添加 {len(new_hosts)} 台主机"})
-        socketio.emit('refresh_hosts')
-
-    threading.Thread(target=import_thread).start()
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "msg": "AWS 导入已启动，导入日志在 /root/ssh_panel/aws_import.log"})
 
 # -------------------- 其他路由 --------------------
 @app.route('/add_host', methods=['POST'])
