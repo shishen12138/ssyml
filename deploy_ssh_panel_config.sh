@@ -4,7 +4,6 @@
 PANEL_DIR="/root/ssh_panel"
 PANEL_PORT=12138
 LOG_FILE="$PANEL_DIR/ssh_web_panel.log"
-
 SERVICE_FILE="/etc/systemd/system/ssh_web_panel.service"
 
 echo "配置如下:"
@@ -26,7 +25,7 @@ echo "系统类型：$OS"
 # ---------- 安装系统依赖 ----------
 install_system_packages() {
     echo "检查并安装系统依赖..."
-    packages=("ifstat" "net-tools" "awk" "procps" "curl" "wget" "python3-pip")
+    packages=("ifstat" "net-tools" "awk" "procps" "curl" "wget" "python3-pip" "python3-venv")
 
     for pkg in "${packages[@]}"; do
         case $pkg in
@@ -38,6 +37,9 @@ install_system_packages() {
                 ;;
             python3-pip)
                 check_cmd="pip3"
+                ;;
+            python3-venv)
+                check_cmd="python3 -m venv"
                 ;;
             *)
                 check_cmd=$pkg
@@ -88,8 +90,23 @@ install_python() {
 # ---------- 安装 Python 库 ----------
 install_python_packages() {
     echo "安装 Python 库..."
-    pip3 install --upgrade pip --break-system-packages
-    pip3 install flask paramiko boto3 requests --break-system-packages
+
+    if [ "$OS" == "debian" ]; then
+        # 优先 apt 安装
+        sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests python3-blinker python3-cryptography || true
+    fi
+
+    # 检查是否缺少 Python 包
+    missing=false
+    for pkg in flask paramiko boto3 requests; do
+        python3 -c "import $pkg" 2>/dev/null || missing=true
+    done
+
+    if [ "$missing" = true ]; then
+        echo "部分库缺失，使用 pip 安装..."
+        pip3 install --upgrade pip --break-system-packages
+        pip3 install flask paramiko boto3 requests --break-system-packages
+    fi
 }
 
 # ---------- 创建日志文件 ----------
