@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SSH Web 面板</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.0/dist/jquery.min.js"></script>
+</head>
+<body>
+<div class="container mt-3">
+    <h2>SSH Web 面板</h2>
+    <table class="table table-bordered table-striped">
+        <thead>
+            <tr>
+                <th>IP</th>
+                <th>端口</th>
+                <th>CPU</th>
+                <th>内存</th>
+                <th>磁盘</th>
+                <th>前五进程</th>
+            </tr>
+        </thead>
+        <tbody id="hostTable">
+            {% for host in hosts %}
+            <tr>
+                <td>{{host.ip}}</td>
+                <td>{{host.port}}</td>
+                <td>{{host.cpu}}</td>
+                <td>{{host.mem}}</td>
+                <td>{{host.disk}}</td>
+                <td>
+                    {% for p in host.processes[:5] %}
+                        {{p[0]}} (CPU: {{p[1]}}%, MEM: {{p[2]}}%)<br>
+                    {% endfor %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <hr>
+    <h4>面板运行日志</h4>
+    <div class="row mb-2">
+        <div class="col-6">
+            <input type="text" id="logFilter" class="form-control" placeholder="输入关键字筛选日志">
+        </div>
+        <div class="col-2">
+            <button class="btn btn-primary" id="logDownload">下载日志</button>
+        </div>
+    </div>
+    <div>
+        <pre id="logOutput" style="background:#f1f1f1; height:300px; overflow:auto; padding:10px;"></pre>
+    </div>
+</div>
+
+<script>
+function highlightLog(line){
+    line = line.replace(/ERROR/gi, '<span style="color:red;font-weight:bold">ERROR</span>');
+    line = line.replace(/WARNING/gi, '<span style="color:orange;font-weight:bold">WARNING</span>');
+    line = line.replace(/INFO/gi, '<span style="color:blue;font-weight:bold">INFO</span>');
+    return line;
+}
+
+function refreshLogs(){
+    let keyword = $('#logFilter').val().trim();
+    $.get('/logs', {keyword: keyword}, function(data){
+        let pre = $('#logOutput');
+        let lines = data.log.split('\n').map(highlightLog);
+        pre.html(lines.join('\n'));
+        pre.scrollTop(pre[0].scrollHeight);
+    });
+}
+
+$(document).ready(function(){
+    setInterval(refreshLogs, 3000);
+    refreshLogs();
+
+    $('#logFilter').on('input', function(){
+        refreshLogs();
+    });
+
+    $('#logDownload').click(function(){
+        window.location.href='/logs/download';
+    });
+});
+</script>
+</body>
+</html>
