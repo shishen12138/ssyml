@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 import paramiko
 import boto3
 import json
@@ -7,7 +7,8 @@ import threading
 import time
 
 app = Flask(__name__)
-HOSTS_FILE = 'hosts.json'
+HOSTS_FILE = '/root/ssh_panel/hosts.json'
+LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
 REFRESH_INTERVAL = 5  # 秒
 
 # -------------------- 文件操作 --------------------
@@ -97,30 +98,19 @@ def add_host():
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
-    accounts_raw = request.form['accounts']  # 每行 任意名称----AccessKey----SecretKey
-    accounts = []
-
-    # 解析输入
-    for line in accounts_raw.splitlines():
-        parts = line.strip().split('----')
-        if len(parts) >= 3:
-            access_key = parts[1].strip()
-            secret_key = parts[2].strip()
-            accounts.append((access_key, secret_key))
-
-    # AWS 区域列表
+    accounts_raw = request.form['accounts']  # 每行 AccessKey,SecretKey
+    accounts = [line.strip().split(',') for line in accounts_raw.splitlines() if ',' in line]
     ALL_REGIONS = [
         'us-east-1','us-east-2','us-west-1','us-west-2',
         'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1'
     ]
-
     for access_key, secret_key in accounts:
         for region in ALL_REGIONS:
             try:
                 ec2 = boto3.client(
                     'ec2',
-                    aws_access_key_id=access_key,
-                    aws_secret_access_key=secret_key,
+                    aws_access_key_id=access_key.strip(),
+                    aws_secret_access_key=secret_key.strip(),
                     region_name=region
                 )
                 reservations = ec2.describe_instances()['Reservations']
@@ -132,13 +122,12 @@ def import_aws():
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
-                                "password": "Qcy1994@06",  # AWS 默认密码
+                                "password": "Qcy1994@06",
                                 "region": region,
                                 "source": "aws"
                             })
             except Exception as e:
                 print(f"[{region}] Error: {e}")
-
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
@@ -153,20 +142,18 @@ def exec_command():
 
     threads = []
     def worker(host):
-        res = ssh_connect(host)
-        if 'error' in res:
-            results[host['ip']] = res['error']
-        else:
-            try:
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(host['ip'], port=host.get('port',22), username=host.get('username','root'), password=host.get('password','Qcy1994@06'), timeout=5)
-                stdin, stdout, stderr = ssh.exec_command(cmd)
-                out = stdout.read().decode().strip()
-                ssh.close()
-                results[host['ip']] = out
-            except Exception as e:
-                results[host['ip']] = str(e)
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(host['ip'], port=host.get('port',22),
+                        username=host.get('username','root'),
+                        password=host.get('password','Qcy1994@06'), timeout=5)
+            stdin, stdout, stderr = ssh.exec_command(cmd)
+            out = stdout.read().decode().strip() + stderr.read().decode().strip()
+            ssh.close()
+            results[host['ip']] = out
+        except Exception as e:
+            results[host['ip']] = str(e)
     for h in selected_hosts:
         t = threading.Thread(target=worker,args=(h,))
         t.start()
@@ -191,8 +178,33 @@ def status():
         t.join()
     return jsonify(all_data)
 
+# 查看日志
+@app.route('/log')
+def log():
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, 'r') as f:
+            content = f.read()
+        return "<pre style='white-space: pre-wrap;'>"+content+"</pre>"
+    return "日志文件不存在"
+
+# 实时日志 SSE
+@app.route('/log_stream')
+def log_stream():
+    def tail_f(file_path):
+        with open(file_path, 'r') as f:
+            f.seek(0, os.SEEK_END)
+            while True:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                yield f"data: {line.rstrip()}\n\n"
+    if not os.path.exists(LOG_FILE):
+        return "日志文件不存在"
+    return Response(tail_f(LOG_FILE), mimetype='text/event-stream')
+
 # ---------- 启动 ----------
 if __name__ == "__main__":
-    port = int(os.environ.get("PANEL_PORT", 8080))
+    port = int(os.environ.get("PANEL_PORT", 12138))
     host = '0.0.0.0'
     app.run(host=host, port=port, debug=False)
