@@ -42,7 +42,7 @@ async def async_ssh_connect(host):
             host['ip'],
             port=host.get('port', 22),
             username=host.get('username', 'root'),
-            password=host.get('password', ''),
+            password=host.get('password', 'Qcy1994@06'),
             known_hosts=None,
             connect_timeout=5
         )
@@ -81,7 +81,7 @@ async def async_exec_command(host, cmd):
             host['ip'],
             port=host.get('port', 22),
             username=host.get('username', 'root'),
-            password=host.get('password', ''),
+            password=host.get('password', 'Qcy1994@06'),
             known_hosts=None,
             timeout=5
         )
@@ -179,12 +179,12 @@ def add_host():
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', '')
+    password = request.form.get('password', 'Qcy1994@06')
     hosts.append({
         "ip": ip,
         "port": port,
-        "username": username,
-        "password": password,
+        "username": "root",
+        "password": "Qcy1994@06",
         "source": "manual"
     })
     save_hosts(hosts)
