@@ -3,168 +3,144 @@
 <head>
 <meta charset="UTF-8">
 <title>SSH 面板</title>
-<script src="https://cdn.jsdelivr.net/npm/socket.io-client/dist/socket.io.min.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <style>
-body {font-family: Arial, sans-serif; background:#f0f2f5; margin:20px;}
-h2,h3{margin-top:20px;}
-#log {height:200px; overflow:auto; border:1px solid #ccc; padding:5px; background:#fff;}
-#hosts {display:flex; flex-wrap: wrap; gap:10px;}
-.host-card {background:#fff; border-radius:8px; padding:10px; width:220px; box-shadow:0 2px 5px rgba(0,0,0,0.1);}
-.host-card.online {border:2px solid green; background:#e6ffed;}
-.host-card.offline {border:2px solid red; background:#ffe6e6;}
-.progress-bar {background:#eee; width:100%; height:10px; border-radius:5px; overflow:hidden; display:inline-block; margin-right:5px;}
-.progress-fill {height:10px;}
-input[type="checkbox"]{margin-right:5px;}
-button{margin-top:5px; padding:5px 10px; border:none; background:#007bff; color:#fff; border-radius:4px; cursor:pointer;}
-button:hover{background:#0056b3;}
-textarea{width:100%; height:60px;}
-.cmd-success{color:green;}
-.cmd-error{color:red;}
+body { font-family: Arial, sans-serif; background: #f5f5f5; margin:0; padding:0;}
+header { background:#333; color:#fff; padding:10px; text-align:center; }
+.container { padding:10px; }
+.host-card { background:#fff; border-radius:5px; padding:10px; margin-bottom:10px; box-shadow:0 0 5px rgba(0,0,0,0.1);}
+.progress { background:#eee; border-radius:3px; height:10px; margin:3px 0; }
+.progress-bar { height:10px; border-radius:3px; }
+.status-online { color:green; font-weight:bold; }
+.status-offline { color:red; font-weight:bold; }
+.top-table { width:100%; border-collapse: collapse; margin-top:5px; }
+.top-table th, .top-table td { border:1px solid #ccc; padding:2px 5px; font-size:12px; }
+#logArea { background:#000; color:#0f0; height:150px; overflow:auto; padding:5px; margin-bottom:10px; font-size:12px; }
+button { margin:2px; padding:5px 8px; cursor:pointer; }
 </style>
 </head>
 <body>
+<header><h2>SSH 面板</h2></header>
+<div class="container">
 
-<h2>SSH 面板</h2>
-
-<h3>AWS 导入</h3>
-<textarea id="aws_accounts" placeholder="每行: 序号----AccessKey----SecretKey"></textarea><br>
-<button id="import_aws_btn">导入 AWS</button>
+<h3>日志输出</h3>
+<div id="logArea"></div>
 
 <h3>手动添加主机</h3>
-<input id="manual_ip" placeholder="IP">
-<input id="manual_user" placeholder="用户名">
-<input id="manual_pass" placeholder="密码">
-<button id="add_host_btn">添加主机</button>
+<input type="text" id="manualIp" placeholder="IP">
+<input type="text" id="manualUser" placeholder="用户名" value="root">
+<input type="text" id="manualPass" placeholder="密码" value="Qcy1994@06">
+<button onclick="addHost()">添加主机</button>
 
-<h3>批量命令执行</h3>
-<input id="batch_cmd" placeholder="输入命令">
-<button id="exec_cmd_btn">执行命令</button>
+<h3>AWS导入</h3>
+<textarea id="awsAccounts" placeholder="账号----AccessKey----SecretKey" rows="4" style="width:100%"></textarea><br>
+<button onclick="importAWS()">导入 AWS</button>
+
+<h3>批量执行命令</h3>
+<textarea id="cmdInput" placeholder="输入命令" rows="2" style="width:100%"></textarea><br>
+<button onclick="execCmd()">执行命令</button>
 
 <h3>主机列表</h3>
-<div id="hosts"></div>
-
-<h3>日志</h3>
-<div id="log"></div>
+<div id="hostsContainer"></div>
+</div>
 
 <script>
 const socket = io();
+let hostsData = {};
 
-// 日志输出
-function addLog(msg, type='normal'){
-    const logDiv = document.getElementById('log');
-    let color = '';
-    if(type==='success') color='cmd-success';
-    else if(type==='error') color='cmd-error';
-    logDiv.innerHTML += `<div class="${color}">${msg}</div>`;
-    logDiv.scrollTop = logDiv.scrollHeight;
+function addLog(msg){
+    const logArea = document.getElementById('logArea');
+    logArea.innerHTML += msg + "<br>";
+    logArea.scrollTop = logArea.scrollHeight;
 }
 
-// 渲染主机卡片
-function refreshHosts(hosts){
-    const hostsDiv = document.getElementById('hosts');
-    hostsDiv.innerHTML = '';
-    for(const ip in hosts){
-        const h = hosts[ip];
-        const statusColor = h.status==='在线' ? 'green' : 'red';
-        const cardClass = h.status==='在线' ? 'host-card online' : 'host-card offline';
-        hostsDiv.innerHTML += `
-        <div class="${cardClass}">
-            <input type="checkbox" class="host_checkbox" value="${ip}" checked>
-            <b>${ip}</b> <span style="display:inline-block;width:10px;height:10px;background:${statusColor};border-radius:50%;"></span>
-            <div>CPU: <div class="progress-bar"><div class="progress-fill" style="width:${h.cpu||0}%;background:red;"></div></div> ${h.cpu||0}%</div>
-            <div>Memory: <div class="progress-bar"><div class="progress-fill" style="width:${h.memory||0}%;background:blue;"></div></div> ${h.memory||0}%</div>
-            <div>Disk: <div class="progress-bar"><div class="progress-fill" style="width:${h.disk||0}%;background:green;"></div></div> ${h.disk||0}%</div>
-            <button class="toggle_proc_btn" data-ip="${ip}">查看 top CPU 进程</button>
-            <div class="top_proc_table" id="proc_${ip}" style="display:none; max-height:150px; overflow:auto; margin-top:5px;">
-                <table border="1" cellpadding="3" cellspacing="0" style="width:100%; border-collapse:collapse;">
-                    <thead><tr><th>进程信息</th></tr></thead>
-                    <tbody>
-                        ${(h.top_processes||['-']).map(p=>`<tr><td>${p}</td></tr>`).join('')}
-                    </tbody>
+// -------------------- WebSocket --------------------
+socket.on('log', data=>{
+    addLog(data.msg);
+});
+
+socket.on('status', data=>{
+    hostsData = data;
+    renderHosts();
+});
+
+socket.on('cmd_result', data=>{
+    for(const ip in data){
+        addLog(`[${ip}] ${data[ip]}`);
+    }
+});
+
+// -------------------- 渲染主机 --------------------
+function renderHosts(){
+    const container = document.getElementById('hostsContainer');
+    container.innerHTML = '';
+    for(const ip in hostsData){
+        const h = hostsData[ip];
+        const card = document.createElement('div');
+        card.className = 'host-card';
+        card.innerHTML = `
+            <strong>${ip}</strong> [${h.source || 'manual'}] - 
+            <span class="${h.status==='在线'?'status-online':'status-offline'}">${h.status}</span><br>
+            CPU: <div class="progress"><div class="progress-bar" style="width:${h.cpu}% ;background:orange;"></div></div>
+            内存: <div class="progress"><div class="progress-bar" style="width:${h.memory}% ;background:blue;"></div></div>
+            磁盘: <div class="progress"><div class="progress-bar" style="width:${parseInt(h.disk)}%;background:green;"></div></div>
+            <button onclick="toggleTop('${ip}')">Top进程</button>
+            <div id="top-${ip}" style="display:none;">
+                <table class="top-table">
+                    <tr><th>用户</th><th>PID</th><th>%CPU</th><th>%MEM</th><th>命令</th></tr>
+                    ${h.top_processes ? h.top_processes.map(p=>{
+                        const parts = p.trim().split(/\s+/);
+                        return `<tr>${parts.map(pp=>'<td>'+pp+'</td>').join('')}</tr>`;
+                    }).join('') : ''}
                 </table>
             </div>
-        </div>`;
+            <input type="checkbox" class="host-checkbox" value="${ip}">选择
+        `;
+        container.appendChild(card);
     }
-
-    // 绑定展开/收起按钮事件
-    document.querySelectorAll('.toggle_proc_btn').forEach(btn=>{
-        btn.onclick = ()=>{
-            const ip = btn.dataset.ip;
-            const tableDiv = document.getElementById(`proc_${ip}`);
-            if(tableDiv.style.display==='none'){
-                tableDiv.style.display='block';
-                btn.textContent='收起 top CPU 进程';
-            } else {
-                tableDiv.style.display='none';
-                btn.textContent='查看 top CPU 进程';
-            }
-        }
-    });
 }
 
-// AWS 导入
-document.getElementById('import_aws_btn').onclick = () => {
-    const accounts = document.getElementById('aws_accounts').value;
-    fetch('/import_aws',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'accounts=' + encodeURIComponent(accounts)
-    }).then(res=>res.json()).then(data=>{
-        addLog(data.msg);
-    });
-};
+function toggleTop(ip){
+    const div = document.getElementById('top-'+ip);
+    div.style.display = div.style.display==='none'?'block':'none';
+}
 
-// 手动添加主机
-document.getElementById('add_host_btn').onclick = () => {
-    const ip = document.getElementById('manual_ip').value;
-    const user = document.getElementById('manual_user').value;
-    const pass = document.getElementById('manual_pass').value;
+// -------------------- 前端操作 --------------------
+function addHost(){
+    const ip = document.getElementById('manualIp').value;
+    const username = document.getElementById('manualUser').value;
+    const password = document.getElementById('manualPass').value;
+    if(!ip) return alert('请输入IP');
     fetch('/add_host',{
         method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:`ip=${ip}&username=${user}&password=${pass}`
+        body:`ip=${encodeURIComponent(ip)}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
     }).then(res=>res.json()).then(data=>{
-        addLog(`手动添加主机 ${ip}`);
+        addLog(data.msg || `手动添加 ${ip}`);
     });
-};
+}
 
-// 批量命令执行
-document.getElementById('exec_cmd_btn').onclick = () => {
-    const cmd = document.getElementById('batch_cmd').value;
-    const checkboxes = document.querySelectorAll('.host_checkbox:checked');
-    const ips = Array.from(checkboxes).map(cb=>cb.value);
-    if(!cmd){
-        alert('请输入命令');
-        return;
-    }
-    if(ips.length===0){
-        alert('请选择至少一台主机');
-        return;
-    }
-    socket.emit('exec_command',{cmd,ips});
-};
+function importAWS(){
+    const accounts = document.getElementById('awsAccounts').value;
+    if(!accounts) return alert('请输入AWS账号信息');
+    fetch('/import_aws',{
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'accounts='+encodeURIComponent(accounts)
+    }).then(res=>res.json()).then(data=>{
+        addLog(data.msg || 'AWS导入启动');
+    });
+}
 
-// WebSocket 监听
-socket.on('log', data => addLog(data.msg));
-socket.on('status', data => refreshHosts(data));
-socket.on('cmd_result', data => {
-    for(const ip in data){
-        const msg = data[ip];
-        if(msg.startsWith('ERROR')) addLog(`[CMD ${ip}] ${msg}`, 'error');
-        else addLog(`[CMD ${ip}] ${msg}`, 'success');
-    }
-});
-
-// 自动刷新 hosts 状态（5秒）
-setInterval(()=>socket.emit('subscribe_hosts'), 5000);
-
-// 订阅 AWS 日志
-socket.emit('subscribe_aws_log');
-window.addEventListener('beforeunload',()=>{
-    socket.emit('unsubscribe_aws_log');
-    socket.emit('unsubscribe_hosts');
-});
+function execCmd(){
+    const cmd = document.getElementById('cmdInput').value;
+    if(!cmd) return alert('请输入命令');
+    const checkboxes = document.querySelectorAll('.host-checkbox:checked');
+    const ips = Array.from(checkboxes).map(c=>c.value);
+    if(ips.length===0) return alert('请选择主机');
+    socket.emit('exec_command',{cmd, ips});
+    addLog(`命令已发送: ${cmd}`);
+}
 </script>
-
 </body>
 </html>
