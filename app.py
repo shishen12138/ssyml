@@ -96,7 +96,6 @@ async def async_exec_command(host, cmd):
 
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
-    """后台循环，按需异步推送状态"""
     global status_loop_started
     with status_loop_lock:
         if status_loop_started:
@@ -164,14 +163,14 @@ def handle_set_interval(data):
     REFRESH_INTERVAL_DEFAULT = max(1, interval)
     emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
 
-# -------------------- 原功能路由 --------------------
+# -------------------- 路由 --------------------
 @app.route('/add_host', methods=['POST'])
 def add_host():
     hosts = load_hosts()
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', '')
+    password = request.form.get('password', 'Qcy1994@06')  # 默认密码
     hosts.append({
         "ip": ip,
         "port": port,
@@ -180,8 +179,7 @@ def add_host():
         "source": "manual"
     })
     save_hosts(hosts)
-    # 推送新主机到前端
-    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
+    socketio.emit('status', {ip: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['手动添加主机'],'error':''}})
     return jsonify({"status":"ok"})
 
 @app.route('/import_aws', methods=['POST'])
@@ -215,12 +213,12 @@ def import_aws():
                 for res in reservations:
                     for inst in res.get('Instances', []):
                         ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                        if ip:
+                        if ip and ip not in [h['ip'] for h in hosts]:
                             host_info = {
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
-                                "password": "",
+                                "password": "Qcy1994@06",  # 默认密码
                                 "region": region,
                                 "source": "aws"
                             }
@@ -230,8 +228,7 @@ def import_aws():
                 print(f"[{region}] AWS Error: {e}")
 
     save_hosts(hosts)
-    # 推送新 AWS 主机到前端
-    socketio.emit('status', {h['ip']: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['AWS 主机导入'], 'error':''} for h in new_hosts})
+    socketio.emit('status', {h['ip']: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['AWS 主机导入'],'error':''} for h in new_hosts})
     return jsonify({"status":"ok","added":len(new_hosts)})
 
 @app.route('/log')
