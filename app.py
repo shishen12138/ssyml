@@ -36,7 +36,7 @@ async def async_ssh_status(host):
     try:
         async with asyncssh.connect(host['ip'], port=host.get('port',22),
                                     username=host.get('username','root'),
-                                    password=host.get('password',''),
+                                    password=host.get('password','Qcy1994@06'),
                                     known_hosts=None, timeout=5) as conn:
             cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
             memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
@@ -85,7 +85,7 @@ async def run_command_pty(host, cmd, sid):
     try:
         async with asyncssh.connect(host['ip'], port=host.get('port',22),
                                     username=host.get('username','root'),
-                                    password=host.get('password',''),
+                                    password=host.get('password','Qcy1994@06),
                                     known_hosts=None) as conn:
             async with conn.create_process(cmd, term_type='xterm') as process:
                 async for line in process.stdout:
@@ -169,7 +169,7 @@ def add_host():
     ip = request.form['ip']
     port = int(request.form.get('port',22))
     username = request.form.get('username','root')
-    password = request.form.get('password','')
+    password = request.form.get('password',Qcy1994@06)
     hosts.append({"ip":ip,"port":port,"username":username,"password":password,"source":"manual"})
     save_hosts(hosts)
     return jsonify({"status":"ok"})
@@ -193,7 +193,7 @@ def import_aws():
                     for inst in res['Instances']:
                         ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
                         if ip:
-                            hosts.append({"ip":ip,"port":22,"username":"root","password":"","region":region,"source":"aws"})
+                            hosts.append({"ip":ip,"port":22,"username":"root","password":"Qcy1994@06","region":region,"source":"aws"})
             except Exception as e:
                 print(f"[{region}] Error: {e}")
     save_hosts(hosts)
