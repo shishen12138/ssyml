@@ -97,19 +97,30 @@ def add_host():
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
-    accounts_raw = request.form['accounts']  # 每行 AccessKey,SecretKey
-    accounts = [line.strip().split(',') for line in accounts_raw.splitlines() if ',' in line]
+    accounts_raw = request.form['accounts']  # 每行 任意名称----AccessKey----SecretKey
+    accounts = []
+
+    # 解析输入
+    for line in accounts_raw.splitlines():
+        parts = line.strip().split('----')
+        if len(parts) >= 3:
+            access_key = parts[1].strip()
+            secret_key = parts[2].strip()
+            accounts.append((access_key, secret_key))
+
+    # AWS 区域列表
     ALL_REGIONS = [
         'us-east-1','us-east-2','us-west-1','us-west-2',
         'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1'
     ]
+
     for access_key, secret_key in accounts:
         for region in ALL_REGIONS:
             try:
                 ec2 = boto3.client(
                     'ec2',
-                    aws_access_key_id=access_key.strip(),
-                    aws_secret_access_key=secret_key.strip(),
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
                     region_name=region
                 )
                 reservations = ec2.describe_instances()['Reservations']
@@ -121,12 +132,13 @@ def import_aws():
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
-                                "password": "Qcy1994@06",
+                                "password": "Qcy1994@06",  # AWS 默认密码
                                 "region": region,
                                 "source": "aws"
                             })
             except Exception as e:
                 print(f"[{region}] Error: {e}")
+
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
