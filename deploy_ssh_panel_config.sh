@@ -29,21 +29,11 @@ install_system_packages() {
 
     for pkg in "${packages[@]}"; do
         case $pkg in
-            net-tools)
-                check_cmd="ifconfig"
-                ;;
-            procps)
-                check_cmd="ps"
-                ;;
-            python3-pip)
-                check_cmd="pip3"
-                ;;
-            python3-venv)
-                check_cmd="python3 -m venv"
-                ;;
-            *)
-                check_cmd=$pkg
-                ;;
+            net-tools) check_cmd="ifconfig" ;;
+            procps) check_cmd="ps" ;;
+            python3-pip) check_cmd="pip3" ;;
+            python3-venv) check_cmd="python3 -m venv" ;;
+            *) check_cmd=$pkg ;;
         esac
 
         if ! command -v $check_cmd >/dev/null 2>&1; then
@@ -80,32 +70,29 @@ install_python() {
             sudo ln -sf /usr/bin/pip /usr/local/bin/pip3
         fi
     fi
-    if command -v pip3 >/dev/null 2>&1; then
-        echo "pip3 已安装: $(pip3 --version)"
-    else
-        echo "pip3 仍未找到，请手动检查 python3-pip 安装"
-    fi
+    echo "pip3 版本: $(pip3 --version || echo '未找到')"
 }
 
 # ---------- 安装 Python 库 ----------
 install_python_packages() {
     echo "安装 Python 库..."
+    PIP_PACKAGES=("flask" "paramiko" "boto3" "requests" "psutil")
 
+    # Debian 系统优先用 apt 安装部分库
     if [ "$OS" == "debian" ]; then
-        # 优先 apt 安装
-        sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests python3-blinker python3-cryptography || true
+        sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests python3-psutil python3-blinker python3-cryptography || true
     fi
 
-    # 检查是否缺少 Python 包
+    # 检查是否缺包
     missing=false
-    for pkg in flask paramiko boto3 requests; do
+    for pkg in "${PIP_PACKAGES[@]}"; do
         python3 -c "import $pkg" 2>/dev/null || missing=true
     done
 
     if [ "$missing" = true ]; then
         echo "部分库缺失，使用 pip 安装..."
         pip3 install --upgrade pip --break-system-packages
-        pip3 install flask paramiko boto3 requests --break-system-packages
+        pip3 install "${PIP_PACKAGES[@]}" --break-system-packages
     fi
 }
 
