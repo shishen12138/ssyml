@@ -1,14 +1,9 @@
 #!/bin/bash
 
-# ---------- 用户可配置 ----------
-read -p "请输入面板运行目录（默认 /root/ssh_panel）: " PANEL_DIR
-PANEL_DIR=${PANEL_DIR:-/root/ssh_panel}
-
-read -p "请输入面板运行端口（默认 12138）: " PANEL_PORT
-PANEL_PORT=${PANEL_PORT:-12138}
-
-read -p "请输入日志文件路径（默认 /root/ssh_panel/ssh_web_panel.log）: " LOG_FILE
-LOG_FILE=${LOG_FILE:-/root/ssh_panel/ssh_web_panel.log}
+# ---------- 默认配置（无需交互） ----------
+PANEL_DIR="/ssh_panel"
+PANEL_PORT=12138
+LOG_FILE="$PANEL_DIR/ssh_web_panel.log"
 
 SERVICE_FILE="/etc/systemd/system/ssh_web_panel.service"
 
@@ -77,6 +72,7 @@ prepare_log() {
 # ---------- 创建 systemd 服务 ----------
 create_systemd_service() {
     echo "创建 systemd 服务..."
+    sudo mkdir -p "$PANEL_DIR"
     sudo bash -c "cat > $SERVICE_FILE" <<EOL
 [Unit]
 Description=SSH Web 面板
