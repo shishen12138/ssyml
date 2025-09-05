@@ -13,7 +13,7 @@ cd "$PANEL_DIR" || { log "进入目录失败"; exit 1; }
 
 # ---------- 2. 下载文件 ----------
 BASE_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main"
-FILES=("app.py" "hosts.json" "deploy_ssh_panel_config.sh")
+FILES=("app.py" "hosts.json" "deploy_ssh_panel_config.sh" "ssh_web_panel.log")
 
 log "开始下载主文件..."
 for file in "${FILES[@]}"; do
