@@ -3,12 +3,9 @@
 <head>
     <title>SSH WebSocket 面板</title>
     <script src="//cdn.socket.io/4.6.1/socket.io.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        .host-card { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
         .progress { height: 20px; }
-        .chart-container { width: 300px; height: 100px; }
         .form-inline input { margin-right: 10px; }
     </style>
 </head>
@@ -37,13 +34,27 @@
 
     <!-- 功能按钮 -->
     <div class="mb-3">
-        <button class="btn btn-primary" onclick="execCmd()">执行命令</button>
         <button class="btn btn-secondary" onclick="setIntervalSeconds()">设置刷新间隔</button>
         <button class="btn btn-info" onclick="tailLog()">实时日志</button>
     </div>
 
-    <!-- 主机列表 -->
-    <div id="hosts"></div>
+    <!-- 主机表格 -->
+    <table class="table table-bordered" id="hosts_table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select_all" onclick="toggleAll(this)"></th>
+                <th>IP</th>
+                <th>CPU</th>
+                <th>内存</th>
+                <th>流量 (RX/TX KB)</th>
+                <th>延迟 (ms)</th>
+            </tr>
+        </thead>
+        <tbody id="hosts_body"></tbody>
+    </table>
+
+    <!-- 命令执行 -->
+    <button class="btn btn-primary" onclick="execSelectedCmd()">执行选择的命令</button>
 
     <!-- 日志 -->
     <h3>日志</h3>
@@ -52,77 +63,58 @@
 
 <script>
 var socket = io();
-var netCharts = {};
+var hostsData = {}; // 保存最新状态
 
-// 连接成功
-socket.on('connect', function() {
-    console.log('连接成功');
-});
-
-// 接收实时状态
-socket.on('status', function(data) {
-    var container = document.getElementById('hosts');
-    container.innerHTML = '';
+// ---------- 接收主机状态 ----------
+socket.on('status', function(data){
+    hostsData = data;
+    var tbody = document.getElementById('hosts_body');
+    tbody.innerHTML = '';
     for(var ip in data){
-        var host = data[ip];
-        var card = document.createElement('div');
-        card.className = 'host-card';
-        var html = `<h5>${ip}</h5>`;
-        if(host.error){
-            html += `<p style="color:red">错误: ${host.error}</p>`;
-        } else {
-            html += `
-            <p>CPU: ${host.cpu}%</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-success" role="progressbar" style="width:${host.cpu}%"></div>
-            </div>
-            <p>Memory: ${host.memory}%</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-info" role="progressbar" style="width:${host.memory}%"></div>
-            </div>
-            <p>Disk: ${host.disk}</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-warning" role="progressbar" style="width:${host.disk.replace('%','')}%"></div>
-            </div>
-            <p>Latency: ${host.latency} ms</p>
-            <canvas id="net-${ip}" class="chart-container"></canvas>
-            <table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
-            host.top_processes.forEach(p => { html += `<tr><td>${p}</td></tr>` });
-            html += `</tbody></table>`;
-        }
-        card.innerHTML = html;
-        container.appendChild(card);
-
-        // 更新网络流量图表
-        if(!host.error){
-            var ctx = document.getElementById(`net-${ip}`).getContext('2d');
-            var rx = parseInt(host.net_rx)/1024;
-            var tx = parseInt(host.net_tx)/1024;
-            if(netCharts[ip]){
-                netCharts[ip].data.datasets[0].data = [rx, tx];
-                netCharts[ip].update();
-            } else {
-                netCharts[ip] = new Chart(ctx, {
-                    type: 'bar',
-                    data: { labels:['RX(KB)','TX(KB)'], datasets:[{label:'网络流量',data:[rx,tx],backgroundColor:['#36a2eb','#ff6384']}] },
-                    options: { responsive:true, animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
-                });
-            }
-        }
+        var h = data[ip];
+        var row = document.createElement('tr');
+        row.innerHTML = `
+            <td><input type="checkbox" class="host_select" data-ip="${ip}"></td>
+            <td>${ip}</td>
+            <td>
+                ${h.cpu !== '-' ? h.cpu + '%' : '-'}
+                <div class="progress mt-1"><div class="progress-bar bg-success" role="progressbar" style="width:${h.cpu !== '-' ? h.cpu : 0}%"></div></div>
+            </td>
+            <td>
+                ${h.memory !== '-' ? h.memory + '%' : '-'}
+                <div class="progress mt-1"><div class="progress-bar bg-info" role="progressbar" style="width:${h.memory !== '-' ? h.memory : 0}%"></div></div>
+            </td>
+            <td>${h.net_rx || 0}/${h.net_tx || 0}</td>
+            <td>${h.latency || '-'}</td>
+        `;
+        tbody.appendChild(row);
     }
 });
 
-// 接收命令结果
-socket.on('cmd_result', function(data){ alert(JSON.stringify(data,null,4)); });
-
-// 接收日志
+// ---------- 日志 ----------
 socket.on('log', function(data){
     var pre = document.getElementById('log');
     pre.textContent += data.msg + "\n";
     pre.scrollTop = pre.scrollHeight;
 });
 
-// 手动添加主机
+// ---------- 全选 / 全不选 ----------
+function toggleAll(checkbox){
+    var selects = document.querySelectorAll('.host_select');
+    selects.forEach(cb => cb.checked = checkbox.checked);
+}
+
+// ---------- 执行选择的命令 ----------
+function execSelectedCmd(){
+    var cmd = prompt("输入命令");
+    if(!cmd) return;
+    var ips = [];
+    document.querySelectorAll('.host_select:checked').forEach(cb => ips.push(cb.dataset.ip));
+    if(ips.length === 0){ alert("请至少选择一个主机"); return; }
+    socket.emit('exec_command', {cmd: cmd, ips: ips});
+}
+
+// ---------- 手动添加主机 ----------
 function addHost(){
     var ip = document.getElementById('manual_ip').value;
     var port = document.getElementById('manual_port').value || 22;
@@ -140,11 +132,11 @@ function addHost(){
     .then(res=>res.json())
     .then(res=>{
         alert('添加完成');
-        socket.emit('refresh_hosts');
+        socket.emit('refresh_hosts'); // 触发刷新
     });
 }
 
-// AWS 导入
+// ---------- AWS 导入 ----------
 function importAWS(){
     var accounts = document.getElementById('aws_accounts').value;
     if(!accounts){ alert('请输入AWS账号'); return; }
@@ -160,24 +152,15 @@ function importAWS(){
     });
 }
 
-// 执行命令
-function execCmd(){
-    var cmd = prompt("输入命令");
-    if(!cmd) return;
-    var ips = prompt("输入IP列表, 用逗号分隔").split(',');
-    socket.emit('exec_command', {cmd: cmd, ips: ips});
-}
-
-// 设置刷新间隔
+// ---------- 设置刷新间隔 ----------
 function setIntervalSeconds(){
     var sec = prompt("输入刷新间隔（秒）");
     if(!sec) return;
     socket.emit('set_interval', {interval: sec});
 }
 
-// 实时日志
+// ---------- 实时日志 ----------
 function tailLog(){ socket.emit('tail_log'); }
-
 </script>
 </body>
 </html>
