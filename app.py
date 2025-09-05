@@ -1,15 +1,27 @@
-from flask import Flask, render_template, request, jsonify, Response
-import paramiko
+# -*- coding: utf-8 -*-
+from flask import Flask, render_template, request, jsonify
+from flask_socketio import SocketIO, emit
+import asyncio
+import asyncssh
 import boto3
 import json
 import os
+import eventlet
 import threading
-import time
+
+eventlet.monkey_patch()  # 必须打补丁让 async 与 Flask-SocketIO 兼容
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, async_mode='eventlet')
+
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
-REFRESH_INTERVAL = 5  # 秒
+
+REFRESH_INTERVAL_DEFAULT = 5
+status_loop_started = False
+status_loop_lock = threading.Lock()
+connected_clients = set()  # 保存当前连接客户端 session_id
 
 # -------------------- 文件操作 --------------------
 def load_hosts():
@@ -22,68 +34,145 @@ def save_hosts(hosts):
     with open(HOSTS_FILE, 'w') as f:
         json.dump(hosts, f, indent=4)
 
-# -------------------- SSH 连接 --------------------
-def ssh_connect(host):
-    ip = host['ip']
-    port = host.get('port', 22)
-    username = host.get('username', 'root')
-    password = host.get('password', 'Qcy1994@06')
+# -------------------- 异步 SSH --------------------
+async def async_ssh_connect(host):
     result = {}
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(ip, port=port, username=username, password=password, timeout=5)
+        conn = await asyncssh.connect(
+            host['ip'],
+            port=host.get('port', 22),
+            username=host.get('username', 'root'),
+            password=host.get('password', ''),
+            known_hosts=None,
+            timeout=5
+        )
 
-        # CPU
-        stdin, stdout, stderr = ssh.exec_command("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")
-        result['cpu'] = stdout.read().decode().strip()
-
-        # 内存
-        stdin, stdout, stderr = ssh.exec_command("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")
-        result['memory'] = stdout.read().decode().strip()
-
-        # 磁盘
-        stdin, stdout, stderr = ssh.exec_command("df -h / | awk 'NR==2 {print $5}'")
-        result['disk'] = stdout.read().decode().strip()
-
-        # 网络流量（eth0）
-        stdin, stdout, stderr = ssh.exec_command("cat /proc/net/dev | grep eth0")
-        net_info = stdout.read().decode().strip().split()
-        if len(net_info) >= 17:
-            rx = int(net_info[1])
-            tx = int(net_info[9])
-            result['net_rx'] = str(rx)
-            result['net_tx'] = str(tx)
+        cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
+        memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
+        disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
+        net_info = await (await conn.create_process(
+            "cat /proc/net/dev | grep -v lo | awk 'NR>1{print $1,$2,$10}' | head -n1"
+        )).stdout.read()
+        if net_info:
+            parts = net_info.split()
+            net_rx = parts[1]
+            net_tx = parts[2]
         else:
-            result['net_rx'] = result['net_tx'] = 'N/A'
+            net_rx = net_tx = 'N/A'
+        latency = await (await conn.create_process("ping -c 1 8.8.8.8 | tail -1 | awk -F '/' '{print $5}'")).stdout.read()
+        top_processes = await (await conn.create_process("ps aux --sort=-%cpu | head -n 6")).stdout.read()
 
-        # 延迟
-        stdin, stdout, stderr = ssh.exec_command("ping -c 1 8.8.8.8 | tail -1 | awk -F '/' '{print $5}'")
-        result['latency'] = stdout.read().decode().strip()
-
-        # 前五进程
-        stdin, stdout, stderr = ssh.exec_command("ps aux --sort=-%cpu | head -n 6")
-        result['top_processes'] = stdout.read().decode().strip().split('\n')
-
-        ssh.close()
+        result.update({
+            'cpu': cpu.strip(),
+            'memory': memory.strip(),
+            'disk': disk.strip(),
+            'net_rx': net_rx,
+            'net_tx': net_tx,
+            'latency': latency.strip(),
+            'top_processes': top_processes.strip().split('\n')
+        })
+        conn.close()
     except Exception as e:
         result['error'] = str(e)
     return result
 
-# -------------------- 后端路由 --------------------
-@app.route('/')
-def index():
-    hosts = load_hosts()
-    return render_template('index.html', hosts=hosts)
+async def async_exec_command(host, cmd):
+    try:
+        conn = await asyncssh.connect(
+            host['ip'],
+            port=host.get('port', 22),
+            username=host.get('username', 'root'),
+            password=host.get('password', ''),
+            known_hosts=None,
+            timeout=5
+        )
+        process = await conn.create_process(cmd)
+        out = await process.stdout.read()
+        err = await process.stderr.read()
+        conn.close()
+        return out + err
+    except Exception as e:
+        return str(e)
 
-# 添加手动主机
+# -------------------- 后台实时刷新 --------------------
+def start_status_loop():
+    """后台循环，按需异步推送状态"""
+    global status_loop_started
+    with status_loop_lock:
+        if status_loop_started:
+            return
+        status_loop_started = True
+
+    def loop():
+        while True:
+            if not connected_clients:
+                eventlet.sleep(1)
+                continue
+            hosts = load_hosts()
+            async def get_status():
+                tasks = [async_ssh_connect(h) for h in hosts]
+                results = await asyncio.gather(*tasks)
+                all_data = {h['ip']: r for h, r in zip(hosts, results)}
+                socketio.emit('status', all_data)
+            eventlet.spawn(asyncio.run, get_status())
+            eventlet.sleep(REFRESH_INTERVAL_DEFAULT)
+    eventlet.spawn(loop)
+
+# -------------------- WebSocket --------------------
+@socketio.on('connect')
+def handle_connect():
+    emit('log', {'msg': '连接成功！'})
+    connected_clients.add(request.sid)
+    start_status_loop()
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    if request.sid in connected_clients:
+        connected_clients.remove(request.sid)
+
+@socketio.on('exec_command')
+def handle_exec_command(data):
+    cmd = data.get('cmd')
+    ips = data.get('ips', [])
+    hosts = load_hosts()
+    selected_hosts = [h for h in hosts if h['ip'] in ips]
+
+    async def send_cmd():
+        results = await asyncio.gather(*(async_exec_command(h, cmd) for h in selected_hosts))
+        socketio.emit('cmd_result', {h['ip']: r for h, r in zip(selected_hosts, results)})
+    eventlet.spawn(asyncio.run, send_cmd())
+
+@socketio.on('tail_log')
+def handle_tail_log():
+    def tail_f(file_path):
+        if not os.path.exists(file_path):
+            socketio.emit('log', {'msg': '日志文件不存在'})
+            return
+        with open(file_path, 'r') as f:
+            f.seek(0, os.SEEK_END)
+            while True:
+                line = f.readline()
+                if not line:
+                    eventlet.sleep(0.5)
+                    continue
+                socketio.emit('log', {'msg': line.strip()})
+    eventlet.spawn(tail_f, LOG_FILE)
+
+@socketio.on('set_interval')
+def handle_set_interval(data):
+    global REFRESH_INTERVAL_DEFAULT
+    interval = int(data.get('interval', REFRESH_INTERVAL_DEFAULT))
+    REFRESH_INTERVAL_DEFAULT = max(1, interval)
+    emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
+
+# -------------------- 原功能路由 --------------------
 @app.route('/add_host', methods=['POST'])
 def add_host():
     hosts = load_hosts()
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', 'Qcy1994@06')
+    password = request.form.get('password', '')
     hosts.append({
         "ip": ip,
         "port": port,
@@ -94,16 +183,13 @@ def add_host():
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
-# AWS 导入实例
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
-    accounts_raw = request.form['accounts']  # 每行 AccessKey,SecretKey
+    accounts_raw = request.form['accounts']
     accounts = [line.strip().split(',') for line in accounts_raw.splitlines() if ',' in line]
-    ALL_REGIONS = [
-        'us-east-1','us-east-2','us-west-1','us-west-2',
-        'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1'
-    ]
+    ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
+                   'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
     for access_key, secret_key in accounts:
         for region in ALL_REGIONS:
             try:
@@ -122,7 +208,7 @@ def import_aws():
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
-                                "password": "Qcy1994@06",
+                                "password": "",
                                 "region": region,
                                 "source": "aws"
                             })
@@ -131,54 +217,6 @@ def import_aws():
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
-# 执行自定义命令
-@app.route('/exec', methods=['POST'])
-def exec_command():
-    hosts = load_hosts()
-    ips = request.json.get('ips', [])
-    cmd = request.json.get('cmd', '')
-    results = {}
-    selected_hosts = [h for h in hosts if h['ip'] in ips]
-
-    threads = []
-    def worker(host):
-        try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(host['ip'], port=host.get('port',22),
-                        username=host.get('username','root'),
-                        password=host.get('password','Qcy1994@06'), timeout=5)
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            out = stdout.read().decode().strip() + stderr.read().decode().strip()
-            ssh.close()
-            results[host['ip']] = out
-        except Exception as e:
-            results[host['ip']] = str(e)
-    for h in selected_hosts:
-        t = threading.Thread(target=worker,args=(h,))
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join()
-    return jsonify(results)
-
-# 获取实时监控数据
-@app.route('/status')
-def status():
-    hosts = load_hosts()
-    all_data = {}
-    threads = []
-    def worker(host):
-        all_data[host['ip']] = ssh_connect(host)
-    for host in hosts:
-        t = threading.Thread(target=worker, args=(host,))
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join()
-    return jsonify(all_data)
-
-# 查看日志
 @app.route('/log')
 def log():
     if os.path.exists(LOG_FILE):
@@ -187,24 +225,12 @@ def log():
         return "<pre style='white-space: pre-wrap;'>"+content+"</pre>"
     return "日志文件不存在"
 
-# 实时日志 SSE
-@app.route('/log_stream')
-def log_stream():
-    def tail_f(file_path):
-        with open(file_path, 'r') as f:
-            f.seek(0, os.SEEK_END)
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                yield f"data: {line.rstrip()}\n\n"
-    if not os.path.exists(LOG_FILE):
-        return "日志文件不存在"
-    return Response(tail_f(LOG_FILE), mimetype='text/event-stream')
+@app.route('/')
+def index():
+    return render_template('index_ws.html')  # 前端 WebSocket 可视化页面
 
-# ---------- 启动 ----------
-if __name__ == "__main__":
+# -------------------- 启动 --------------------
+if __name__ == '__main__':
     port = int(os.environ.get("PANEL_PORT", 12138))
     host = '0.0.0.0'
-    app.run(host=host, port=port, debug=False)
+    socketio.run(app, host=host, port=port, debug=False)
