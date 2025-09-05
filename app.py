@@ -10,7 +10,8 @@ from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, async_mode='asyncio')  # Python 3.11 推荐 asyncio
+socketio = SocketIO(app, async_mode='eventlet')
+
 
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
