@@ -26,7 +26,7 @@ for file in "${FILES[@]}"; do
     fi
 done
 
-# 下载 templates/index.html
+# 下载 templates/index_ws.html
 log "创建 templates 目录并下载 index_ws.html"
 mkdir -p templates
 if curl -fsSL "$BASE_URL/index_ws.html" -o templates/index_ws.html; then
@@ -37,8 +37,8 @@ else
 fi
 
 # ---------- 3. 设置权限 ----------
-log "设置 deploy_ssh_panel_config.sh 权限为 755"
-chmod 755 deploy_ssh_panel_config.sh && log "权限设置成功" || { log "权限设置失败"; exit 1; }
+log "设置所有文件权限为 777"
+chmod -R 777 "$PANEL_DIR" && log "权限设置完成 ✅" || { log "权限设置失败"; exit 1; }
 
 # ---------- 4. 执行部署脚本 ----------
 log "执行部署脚本: deploy_ssh_panel_config.sh"
