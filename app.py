@@ -46,6 +46,7 @@ async def async_ssh_connect(host):
             known_hosts=None,
             connect_timeout=5
         )
+
         cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
         memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
         disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
@@ -60,6 +61,7 @@ async def async_ssh_connect(host):
             net_rx = net_tx = 'N/A'
         latency = await (await conn.create_process("ping -c 1 8.8.8.8 | tail -1 | awk -F '/' '{print $5}'")).stdout.read()
         top_processes = await (await conn.create_process("ps aux --sort=-%cpu | head -n 6")).stdout.read()
+
         result.update({
             'cpu': cpu.strip(),
             'memory': memory.strip(),
@@ -94,6 +96,7 @@ async def async_exec_command(host, cmd):
 
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
+    """后台循环，按需异步推送状态"""
     global status_loop_started
     with status_loop_lock:
         if status_loop_started:
@@ -161,14 +164,14 @@ def handle_set_interval(data):
     REFRESH_INTERVAL_DEFAULT = max(1, interval)
     emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
 
-# -------------------- 路由 --------------------
+# -------------------- 原功能路由 --------------------
 @app.route('/add_host', methods=['POST'])
 def add_host():
     hosts = load_hosts()
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', '') or "Qcy1994@06"
+    password = request.form.get('password', 'Qcy1994@06')
     hosts.append({
         "ip": ip,
         "port": port,
@@ -177,68 +180,71 @@ def add_host():
         "source": "manual"
     })
     save_hosts(hosts)
-    socketio.emit('status', {ip: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['手动添加主机'], 'error':''}})
+    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
     return jsonify({"status":"ok"})
 
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
+    hosts = load_hosts()
     accounts_raw = request.form['accounts']
-    accounts = []
-    for line in accounts_raw.splitlines():
-        parts = line.strip().split('----')
-        if len(parts) >= 3:
-            access_key = parts[1].strip()
-            secret_key = parts[2].strip()
-            accounts.append((access_key, secret_key))
 
-    ALL_REGIONS = [
-        'us-east-1','us-east-2','us-west-1','us-west-2',
-        'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1'
-    ]
+    def import_thread():
+        new_hosts = []
+        accounts = []
+        for line in accounts_raw.splitlines():
+            parts = line.strip().split('----')
+            if len(parts) >= 3:
+                accounts.append((parts[1].strip(), parts[2].strip()))
+        
+        socketio.emit('log', {'msg': f"开始导入 AWS 账号，总账号数 {len(accounts)}"})
 
-    socketio.emit('log', {'msg': f"开始导入 AWS 账号，共 {len(accounts)} 个账号"})
-
-    def import_task():
-        hosts = load_hosts()
-        total_added = 0
-        for idx, (access_key, secret_key) in enumerate(accounts, 1):
-            socketio.emit('log', {'msg': f"开始导入 AWS 账号: {idx}"})
-            for region in ALL_REGIONS:
-                socketio.emit('log', {'msg': f"连接区域: {region}"})
+        for i in range(0, len(accounts), 5):
+            batch_accounts = accounts[i:i+5]
+            for idx, (access_key, secret_key) in enumerate(batch_accounts, start=i+1):
+                socketio.emit('log', {'msg': f"开始处理账号 {idx}"})
+                session = boto3.Session(
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key
+                )
                 try:
-                    ec2 = boto3.client(
-                        'ec2',
-                        aws_access_key_id=access_key,
-                        aws_secret_access_key=secret_key,
-                        region_name=region
-                    )
-                    reservations = ec2.describe_instances().get('Reservations', [])
-                    for res in reservations:
-                        for inst in res.get('Instances', []):
-                            ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                            if ip:
-                                host_info = {
-                                    "ip": ip,
-                                    "port": 22,
-                                    "username": "root",
-                                    "password": "Qcy1994@06",
-                                    "region": region,
-                                    "source": "aws"
-                                }
-                                hosts.append(host_info)
-                                total_added += 1
-                                socketio.emit('status', {ip: {
-                                    'cpu':'-','memory':'-','disk':'-',
-                                    'net_rx':'-','net_tx':'-','latency':'-',
-                                    'top_processes':['AWS 主机导入'], 'error':''
-                                }})
+                    ec2_client = session.client('ec2', region_name='us-east-1')
+                    regions_resp = ec2_client.describe_regions()['Regions']
+                    all_regions = [r['RegionName'] for r in regions_resp]
                 except Exception as e:
-                    socketio.emit('log', {'msg': f"区域 {region} 出现错误: {e}"})
-        save_hosts(hosts)
-        socketio.emit('log', {'msg': f"AWS 导入完成，共添加 {total_added} 台主机"})
+                    socketio.emit('log', {'msg': f"账号 {idx} 获取区域失败: {e}"})
+                    continue
 
-    threading.Thread(target=import_task).start()
-    return jsonify({"status":"ok","message":"AWS 导入任务已启动，查看面板日志"})
+                for j in range(0, len(all_regions), 5):
+                    region_batch = all_regions[j:j+5]
+                    for region in region_batch:
+                        socketio.emit('log', {'msg': f"账号 {idx} 连接区域: {region}"})
+                        try:
+                            ec2 = session.client('ec2', region_name=region)
+                            reservations = ec2.describe_instances().get('Reservations', [])
+                            for res in reservations:
+                                for inst in res.get('Instances', []):
+                                    ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
+                                    if ip:
+                                        host_info = {
+                                            "ip": ip,
+                                            "port": 22,
+                                            "username": "root",
+                                            "password": "Qcy1994@06",
+                                            "region": region,
+                                            "source": "aws"
+                                        }
+                                        hosts.append(host_info)
+                                        new_hosts.append(host_info)
+                                        socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 添加实例 {ip}"})
+                        except Exception as e:
+                            socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 出现错误: {e}"})
+
+        save_hosts(hosts)
+        socketio.emit('log', {'msg': f"AWS 导入完成，共添加 {len(new_hosts)} 台主机"})
+        socketio.emit('refresh_hosts')
+
+    threading.Thread(target=import_thread).start()
+    return jsonify({"status": "ok"})
 
 @app.route('/log')
 def log_route():
