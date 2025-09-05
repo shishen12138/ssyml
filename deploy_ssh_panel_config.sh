@@ -20,7 +20,7 @@ echo "系统类型：$OS"
 # ---------- 安装系统依赖 ----------
 install_system_packages(){
     echo "安装系统依赖..."
-    packages=("ifstat" "net-tools" "awk" "procps" "curl" "wget" "python3-venv" "python3-pip" "git")
+    packages=("ifstat" "net-tools" "awk" "procps" "curl" "wget" "python3-venv" "python3-pip" "git" "software-properties-common")
     for pkg in "${packages[@]}"; do
         command -v $pkg >/dev/null 2>&1 || {
             echo "$pkg 未安装，正在安装..."
@@ -30,19 +30,28 @@ install_system_packages(){
     done
 }
 
-# ---------- 安装 Python3 ----------
+# ---------- 安装 Python3.11 ----------
 install_python(){
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "安装 Python3..."
-        if [ "$OS" == "debian" ]; then sudo apt update -y && sudo apt install -y python3 python3-venv python3-pip
-        else sudo yum install -y python3 python3-pip; fi
-    else echo "Python3 已安装"; fi
-
-    # 修复 pip3 路径
-    if ! command -v pip3 >/dev/null 2>&1; then
-        [ -x "/usr/bin/pip3" ] && sudo ln -sf /usr/bin/pip3 /usr/local/bin/pip3
-        [ -x "/usr/bin/pip" ] && sudo ln -sf /usr/bin/pip /usr/local/bin/pip3
+    if ! command -v python3.11 >/dev/null 2>&1; then
+        echo "安装 Python3.11..."
+        if [ "$OS" == "debian" ]; then
+            sudo add-apt-repository -y ppa:deadsnakes/ppa
+            sudo apt update -y
+            sudo apt install -y python3.11 python3.11-venv python3.11-distutils python3.11-dev
+            wget https://bootstrap.pypa.io/get-pip.py -O /tmp/get-pip.py
+            sudo python3.11 /tmp/get-pip.py
+            rm -f /tmp/get-pip.py
+        else
+            echo "请在 RedHat 系统手动安装 Python3.11"
+            exit 1
+        fi
+    else
+        echo "Python3.11 已安装"
     fi
+
+    # 确保 pip3 指向 python3.11
+    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 2
+    sudo update-alternatives --install /usr/bin/pip3 pip3 /usr/local/bin/pip 2
 }
 
 # ---------- 安装 Python 库（强制覆盖） ----------
@@ -84,7 +93,7 @@ User=root
 WorkingDirectory=$PANEL_DIR
 Environment=PANEL_PORT=$PANEL_PORT
 Environment=LOG_FILE=$LOG_FILE
-ExecStart=/usr/bin/python3 $APP_FILE
+ExecStart=/usr/bin/python3.11 $APP_FILE
 Restart=always
 RestartSec=5
 
