@@ -69,19 +69,15 @@ async def async_exec_command(host, cmd):
             connect_timeout=5
         )
         process = await conn.create_process(cmd)
-        output = ''
         while True:
             line = await process.stdout.readline()
             if not line:
                 break
-            output += line
             socketio.emit('cmd_result', {host['ip']: line.strip()})
         await process.wait()
         conn.close()
-        return output
     except Exception as e:
         socketio.emit('cmd_result', {host['ip']: f"ERROR: {e}"})
-        return str(e)
 
 # -------------------- 后台刷新 --------------------
 def start_status_loop():
@@ -151,7 +147,8 @@ def add_host():
         "source": "manual"
     })
     save_hosts(hosts)
-    return jsonify({"status":"ok"})
+    socketio.emit('status', {h['ip']: h for h in hosts})
+    return jsonify({"status":"ok", "msg": f"手动添加主机 {ip}"})
 
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
@@ -164,14 +161,17 @@ def import_aws():
             parts = line.strip().split('----')
             if len(parts) >= 3:
                 accounts.append((parts[1].strip(), parts[2].strip()))
-        new_hosts = import_aws_instances(accounts, batch_size=5)
+
+        def log(msg):
+            socketio.emit('log', {'msg': msg})
+
+        new_hosts = import_aws_instances(accounts, batch_size=5, log_callback=log)
         hosts.extend(new_hosts)
         save_hosts(hosts)
         socketio.emit('status', {h['ip']: h for h in hosts})
 
     threading.Thread(target=import_thread).start()
     return jsonify({"status":"ok", "msg":"AWS 导入任务已启动"})
-
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
