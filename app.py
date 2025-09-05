@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-import os
-import json
-import asyncio
-import asyncssh
-import threading
-import boto3
+import os, json, asyncio, asyncssh, eventlet, threading, boto3
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
+# --------- eventlet 异步补丁 ---------
+eventlet.monkey_patch()
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, async_mode='eventlet')
 
+# 使用 eventlet 模式
+socketio = SocketIO(app, async_mode='eventlet')
 
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
@@ -22,6 +21,7 @@ BATCH_DELAY = 1
 status_loop_started = False
 status_loop_lock = threading.Lock()
 connected_clients = set()
+
 
 
 # -------------------- 文件操作 --------------------
