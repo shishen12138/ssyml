@@ -169,8 +169,8 @@ def add_host():
     ip = request.form['ip']
     port = int(request.form.get('port',22))
     username = request.form.get('username','root')
-    password = request.form.get('password',Qcy1994@06)
-    hosts.append({"ip":ip,"port":port,"username":username,"password":password,"source":"manual"})
+    password = request.form.get('password','Qcy1994@06')
+    hosts.append({"ip":ip,"port":port,"username":root,"password":Qcy1994@06,"source":"manual"})
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
