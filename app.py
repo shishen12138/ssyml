@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-import os, json, asyncio, asyncssh, eventlet, threading, boto3
+import os, json, asyncio, asyncssh, eventlet, threading, boto3, traceback
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
-eventlet.monkey_patch()
+# 安全 patch，避免 boto3/ssl 递归错误
+eventlet.monkey_patch(socket=True, select=True, thread=True, time=True, os=True)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -13,46 +14,80 @@ HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
 
 REFRESH_INTERVAL = 5
-MAX_CONCURRENT_SSH = 5
 BATCH_DELAY = 1
 status_loop_started = False
 status_loop_lock = threading.Lock()
 connected_clients = set()
+ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
+               'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
+
+# -------------------- 日志 --------------------
+def log_msg(msg):
+    try:
+        with open(LOG_FILE,'a',encoding='utf-8') as f:
+            f.write(msg+"\n")
+    except:
+        pass
+    try:
+        socketio.emit('log', {'msg': msg})
+    except:
+        pass
 
 # -------------------- 文件操作 --------------------
-def load_hosts():
+def ensure_hosts_file():
+    if not os.path.exists(os.path.dirname(HOSTS_FILE)):
+        os.makedirs(os.path.dirname(HOSTS_FILE), exist_ok=True)
     if not os.path.exists(HOSTS_FILE):
+        with open(HOSTS_FILE,'w',encoding='utf-8') as f:
+            json.dump([], f)
+
+def load_hosts():
+    ensure_hosts_file()
+    try:
+        with open(HOSTS_FILE,'r',encoding='utf-8') as f:
+            return json.load(f)
+    except:
         return []
-    with open(HOSTS_FILE,'r') as f:
-        return json.load(f)
 
 def save_hosts(hosts):
-    with open(HOSTS_FILE,'w') as f:
-        json.dump(hosts,f,indent=4)
+    # 去重，按 IP 保留最后一条
+    dedup = {h['ip']:h for h in hosts if 'ip' in h}
+    ensure_hosts_file()
+    with open(HOSTS_FILE,'w',encoding='utf-8') as f:
+        json.dump(list(dedup.values()),f,indent=4,ensure_ascii=False)
 
 # -------------------- SSH 状态 --------------------
 async def async_ssh_status(host):
     result = {}
     try:
-        async with asyncssh.connect(host['ip'], port=host.get('port',22),
-                                    username=host.get('username','root'),
-                                    password=host.get('password','Qcy1994@06'),
-                                    known_hosts=None, timeout=5) as conn:
+        async with asyncssh.connect(
+            host['ip'],
+            port=host.get('port',22),
+            username=host.get('username','root'),
+            password=host.get('password','Qcy1994@06'),
+            known_hosts=None,
+            timeout=5
+        ) as conn:
             cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
             memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
             disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
             net_info = await (await conn.create_process("cat /proc/net/dev | grep -v lo | awk 'NR>1{print $1,$2,$10}' | head -n1")).stdout.read()
             if net_info:
                 parts = net_info.split()
-                net_rx, net_tx = parts[1], parts[2]
+                net_rx = parts[1] if len(parts)>=3 else '0'
+                net_tx = parts[2] if len(parts)>=3 else '0'
             else:
                 net_rx = net_tx = '0'
             latency = await (await conn.create_process("ping -c 1 8.8.8.8 | tail -1 | awk -F '/' '{print $5}'")).stdout.read()
             top_processes = await (await conn.create_process("ps aux --sort=-%cpu | head -n 6")).stdout.read()
             result.update({
-                'cpu': cpu.strip(), 'memory': memory.strip(), 'disk': disk.strip(),
-                'net_rx': net_rx.strip(), 'net_tx': net_tx.strip(),
-                'latency': latency.strip(), 'top_processes': top_processes.strip().split('\n')
+                'cpu': cpu.strip(),
+                'memory': memory.strip(),
+                'disk': disk.strip(),
+                'net_rx': net_rx.strip(),
+                'net_tx': net_tx.strip(),
+                'latency': latency.strip(),
+                'top_processes': top_processes.strip().split('\n')
             })
     except Exception as e:
         result['error'] = str(e)
@@ -71,33 +106,47 @@ def start_status_loop():
                 eventlet.sleep(1)
                 continue
             hosts = load_hosts()
+            if not hosts:
+                eventlet.sleep(REFRESH_INTERVAL)
+                continue
+
             async def get_status_batch():
                 tasks = [async_ssh_status(h) for h in hosts]
-                results = await asyncio.gather(*tasks)
-                all_data = {h['ip']: r for h,r in zip(hosts, results)}
-                socketio.emit('status', all_data)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                data = {}
+                for h,r in zip(hosts,results):
+                    ip = h.get('ip','unknown')
+                    if isinstance(r, Exception):
+                        data[ip] = {'error': str(r)}
+                    else:
+                        data[ip] = r
+                socketio.emit('status', data)
+
             eventlet.spawn(asyncio.run, get_status_batch())
             eventlet.sleep(REFRESH_INTERVAL)
+
     eventlet.spawn(loop)
 
 # -------------------- 执行命令 --------------------
 async def run_command_pty(host, cmd, sid):
     try:
-        async with asyncssh.connect(host['ip'], port=host.get('port',22),
-                                    username=host.get('username','root'),
-                                    password=host.get('password','Qcy1994@06'),
-                                    known_hosts=None) as conn:
+        async with asyncssh.connect(
+            host['ip'], port=host.get('port',22),
+            username=host.get('username','root'),
+            password=host.get('password','Qcy1994@06'),
+            known_hosts=None
+        ) as conn:
             async with conn.create_process(cmd, term_type='xterm') as process:
                 async for line in process.stdout:
                     socketio.emit('cmd_output', {'ip': host['ip'], 'line': line}, room=sid)
-                    with open(LOG_FILE,'a',encoding='utf-8') as f: f.write(f"[{host['ip']}] {line}")
+                    log_msg(f"[{host['ip']}] {line}")
                 async for line in process.stderr:
                     socketio.emit('cmd_output', {'ip': host['ip'], 'line': line}, room=sid)
-                    with open(LOG_FILE,'a',encoding='utf-8') as f: f.write(f"[{host['ip']}] {line}")
+                    log_msg(f"[{host['ip']}] {line}")
     except Exception as e:
-        msg = f"Error: {e}\n"
+        msg = f"Error: {e}"
         socketio.emit('cmd_output', {'ip': host['ip'], 'line': msg}, room=sid)
-        with open(LOG_FILE,'a',encoding='utf-8') as f: f.write(f"[{host['ip']}] {msg}")
+        log_msg(f"[{host['ip']}] {msg}")
     finally:
         socketio.emit('cmd_done', {'ip': host['ip']}, room=sid)
 
@@ -150,12 +199,9 @@ def handle_set_interval(data):
     emit('log', {'msg':f'刷新间隔已设置为 {REFRESH_INTERVAL} 秒'})
 
 # -------------------- AWS 导入 --------------------
-ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
-               'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
-
 def import_aws_thread(accounts):
     hosts = load_hosts()
-    total = len(accounts) * len(ALL_REGIONS)
+    total = len(accounts)*len(ALL_REGIONS)
     count = 0
     for name, access_key, secret_key in accounts:
         for region in ALL_REGIONS:
@@ -167,7 +213,7 @@ def import_aws_thread(accounts):
                 reservations = ec2.describe_instances()['Reservations']
                 for res in reservations:
                     for inst in res['Instances']:
-                        if inst.get('State', {}).get('Name') != 'running':
+                        if inst.get('State',{}).get('Name')!='running':
                             continue
                         ip = inst.get('PublicIpAddress')
                         if not ip:
@@ -224,7 +270,7 @@ def log_view():
 # -------------------- 页面 --------------------
 @app.route('/')
 def index():
-    return render_template('index_ws.html')  # 前端文件名 index.html
+    return render_template('index_ws.html')  # 前端文件名 index_ws.html
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
