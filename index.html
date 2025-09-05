@@ -1,86 +1,184 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>SSH Web 面板</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
-<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.0/dist/jquery.min.js"></script>
+    <title>SSH Web 面板</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.5/css/dataTables.bootstrap5.min.css">
+    <style>
+        pre {background:#f8f9fa;padding:5px;margin:0;}
+        .table-responsive {max-height: 600px; overflow-y: auto;}
+    </style>
 </head>
 <body>
-<div class="container mt-3">
-    <h2>SSH Web 面板</h2>
-    <table class="table table-bordered table-striped">
-        <thead>
+<div class="container mt-4">
+    <h2>SSH Web 管理面板</h2>
+
+    <!-- 添加手动主机 -->
+    <form id="manualForm" class="mb-3">
+        <div class="row g-2">
+            <div class="col"><input type="text" class="form-control" name="ip" placeholder="IP" required></div>
+            <div class="col"><input type="number" class="form-control" name="port" placeholder="端口" value="22"></div>
+            <div class="col"><input type="text" class="form-control" name="username" placeholder="用户名" value="root"></div>
+            <div class="col"><input type="password" class="form-control" name="password" placeholder="密码" value="Qcy1994@06"></div>
+            <div class="col"><button type="submit" class="btn btn-primary w-100">添加主机</button></div>
+        </div>
+    </form>
+
+    <!-- AWS 导入 -->
+    <form id="awsForm" class="mb-3">
+        <textarea class="form-control mb-2" name="accounts" placeholder="输入 AWS Key，每行 AccessKey,SecretKey"></textarea>
+        <button type="submit" class="btn btn-success">导入 AWS 实例</button>
+    </form>
+
+    <hr>
+
+    <!-- 批量命令按钮 -->
+    <button id="batchCmdBtn" class="btn btn-warning mb-2">批量执行命令</button>
+
+    <!-- 主机列表 -->
+    <div class="table-responsive">
+    <table class="table table-bordered table-striped" id="hostsTable">
+        <thead class="table-dark">
             <tr>
+                <th><input type="checkbox" id="selectAll"></th>
                 <th>IP</th>
-                <th>端口</th>
-                <th>CPU</th>
-                <th>内存</th>
+                <th>CPU(%)</th>
+                <th>内存(%)</th>
                 <th>磁盘</th>
+                <th>网络 RX</th>
+                <th>网络 TX</th>
+                <th>延迟(ms)</th>
                 <th>前五进程</th>
+                <th>操作</th>
             </tr>
         </thead>
-        <tbody id="hostTable">
+        <tbody>
             {% for host in hosts %}
-            <tr>
-                <td>{{host.ip}}</td>
-                <td>{{host.port}}</td>
-                <td>{{host.cpu}}</td>
-                <td>{{host.mem}}</td>
-                <td>{{host.disk}}</td>
-                <td>
-                    {% for p in host.processes[:5] %}
-                        {{p[0]}} (CPU: {{p[1]}}%, MEM: {{p[2]}}%)<br>
-                    {% endfor %}
-                </td>
+            <tr id="row-{{ host.ip }}">
+                <td><input type="checkbox" class="host-checkbox" data-ip="{{ host.ip }}"></td>
+                <td>{{ host.ip }}</td>
+                <td><div class="progress"><div class="progress-bar" id="cpu-{{ host.ip }}" style="width:0%">0%</div></div></td>
+                <td><div class="progress"><div class="progress-bar bg-success" id="mem-{{ host.ip }}" style="width:0%">0%</div></div></td>
+                <td><span id="disk-{{ host.ip }}"></span></td>
+                <td><span id="net_rx-{{ host.ip }}"></span></td>
+                <td><span id="net_tx-{{ host.ip }}"></span></td>
+                <td><span id="latency-{{ host.ip }}"></span></td>
+                <td><pre id="proc-{{ host.ip }}"></pre></td>
+                <td><button class="btn btn-sm btn-info exec-btn" data-ip="{{ host.ip }}">单台命令</button></td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
-
-    <hr>
-    <h4>面板运行日志</h4>
-    <div class="row mb-2">
-        <div class="col-6">
-            <input type="text" id="logFilter" class="form-control" placeholder="输入关键字筛选日志">
-        </div>
-        <div class="col-2">
-            <button class="btn btn-primary" id="logDownload">下载日志</button>
-        </div>
-    </div>
-    <div>
-        <pre id="logOutput" style="background:#f1f1f1; height:300px; overflow:auto; padding:10px;"></pre>
     </div>
 </div>
 
-<script>
-function highlightLog(line){
-    line = line.replace(/ERROR/gi, '<span style="color:red;font-weight:bold">ERROR</span>');
-    line = line.replace(/WARNING/gi, '<span style="color:orange;font-weight:bold">WARNING</span>');
-    line = line.replace(/INFO/gi, '<span style="color:blue;font-weight:bold">INFO</span>');
-    return line;
-}
+<!-- 命令弹窗 -->
+<div class="modal fade" id="cmdModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">执行命令</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="cmdInput" class="form-control mb-2" placeholder="输入命令"></textarea>
+        <pre id="cmdOutput"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="cmdRun">运行</button>
+        <button class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
 
-function refreshLogs(){
-    let keyword = $('#logFilter').val().trim();
-    $.get('/logs', {keyword: keyword}, function(data){
-        let pre = $('#logOutput');
-        let lines = data.log.split('\n').map(highlightLog);
-        pre.html(lines.join('\n'));
-        pre.scrollTop(pre[0].scrollHeight);
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.5/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.5/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+let selectedIPs = [];
+let cmdModal = new bootstrap.Modal(document.getElementById('cmdModal'));
+
+function refreshStatus(){
+    $.get('/status', function(data){
+        for(let ip in data){
+            let d = data[ip];
+            if(d.error){
+                $('#cpu-'+ip).css('width','0%').text('Err');
+                $('#mem-'+ip).css('width','0%').text('Err');
+                $('#disk-'+ip).text('Err');
+                $('#latency-'+ip).text('Err');
+                $('#net_rx-'+ip).text('Err');
+                $('#net_tx-'+ip).text('Err');
+                $('#proc-'+ip).text(d.error);
+            } else {
+                $('#cpu-'+ip).css('width',d.cpu+'%').text(d.cpu+'%');
+                $('#mem-'+ip).css('width',d.memory+'%').text(d.memory+'%');
+                $('#disk-'+ip).text(d.disk);
+                $('#latency-'+ip).text(d.latency);
+                $('#net_rx-'+ip).text(d.net_rx);
+                $('#net_tx-'+ip).text(d.net_tx);
+                $('#proc-'+ip).text(d.top_processes.join('\n'));
+            }
+        }
     });
 }
 
 $(document).ready(function(){
-    setInterval(refreshLogs, 3000);
-    refreshLogs();
+    let table = $('#hostsTable').DataTable({scrollX:true});
 
-    $('#logFilter').on('input', function(){
-        refreshLogs();
+    setInterval(refreshStatus, 5000);
+    refreshStatus();
+
+    $('#manualForm').submit(function(e){
+        e.preventDefault();
+        $.post('/add_host', $(this).serialize(), function(res){ location.reload(); });
     });
 
-    $('#logDownload').click(function(){
-        window.location.href='/logs/download';
+    $('#awsForm').submit(function(e){
+        e.preventDefault();
+        $.post('/import_aws', $(this).serialize(), function(res){ location.reload(); });
+    });
+
+    // 单台命令
+    $('.exec-btn').click(function(){
+        selectedIPs = [$(this).data('ip')];
+        $('#cmdInput').val('');
+        $('#cmdOutput').text('');
+        cmdModal.show();
+    });
+
+    // 批量命令按钮
+    $('#batchCmdBtn').click(function(){
+        selectedIPs = [];
+        $('.host-checkbox:checked').each(function(){ selectedIPs.push($(this).data('ip')); });
+        if(selectedIPs.length==0){ alert('请选择主机'); return; }
+        $('#cmdInput').val('');
+        $('#cmdOutput').text('');
+        cmdModal.show();
+    });
+
+    $('#cmdRun').click(function(){
+        let cmd = $('#cmdInput').val().trim();
+        if(!cmd) return;
+        $.ajax({
+            url:'/exec',
+            type:'POST',
+            contentType:'application/json',
+            data: JSON.stringify({ips:selectedIPs, cmd:cmd}),
+            success: function(res){
+                let text = '';
+                for(let ip in res){ text += ip + ':\n' + res[ip] + '\n\n'; }
+                $('#cmdOutput').text(text);
+            }
+        });
+    });
+
+    // 全选复选框
+    $('#selectAll').click(function(){
+        $('.host-checkbox').prop('checked', this.checked);
     });
 });
 </script>
