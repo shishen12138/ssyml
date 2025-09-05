@@ -9,14 +9,36 @@
         .host-card { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
         .progress { height: 20px; }
         .chart-container { width: 300px; height: 100px; }
+        pre { max-height:200px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>SSH WebSocket 面板</h1>
+
+    <!-- 添加主机 -->
     <div class="mb-3">
-        <button class="btn btn-primary" onclick="execCmd()">执行命令</button>
-        <button class="btn btn-secondary" onclick="setIntervalSeconds()">设置刷新间隔</button>
+        <form id="manualForm" class="row g-2">
+            <div class="col"><input type="text" class="form-control" name="ip" placeholder="IP" required></div>
+            <div class="col"><input type="number" class="form-control" name="port" placeholder="端口" value="22"></div>
+            <div class="col"><input type="text" class="form-control" name="username" placeholder="用户名" value="root"></div>
+            <div class="col"><input type="password" class="form-control" name="password" placeholder="密码" value="Qcy1994@06"></div>
+            <div class="col"><button type="submit" class="btn btn-primary w-100">添加主机</button></div>
+        </form>
+    </div>
+
+    <!-- AWS 导入 -->
+    <div class="mb-3">
+        <form id="awsForm">
+            <textarea class="form-control mb-2" name="accounts" placeholder="每行: 任意名称----AccessKey----SecretKey"></textarea>
+            <button type="submit" class="btn btn-success">导入 AWS 实例</button>
+        </form>
+    </div>
+
+    <div class="mb-3">
+        <button class="btn btn-warning" onclick="execSelectedCmd()">批量执行命令</button>
+        <button class="btn btn-secondary" onclick="selectAll()">全选</button>
+        <button class="btn btn-secondary" onclick="deselectAll()">全不选</button>
         <button class="btn btn-info" onclick="tailLog()">实时日志</button>
     </div>
 
@@ -28,119 +50,92 @@
 
 <script>
 var socket = io();
-
-// 保存 chart 对象
 var netCharts = {};
 
-// 连接成功
-socket.on('connect', function() {
-    console.log('连接成功');
-});
+// WebSocket 事件
+socket.on('connect', function(){ console.log('已连接'); });
 
-// 接收实时状态
-socket.on('status', function(data) {
+// 全选 / 全不选
+function selectAll(){ document.querySelectorAll('.host-checkbox').forEach(cb=>cb.checked=true); }
+function deselectAll(){ document.querySelectorAll('.host-checkbox').forEach(cb=>cb.checked=false); }
+
+// 批量执行命令
+function execSelectedCmd(){
+    let selectedIPs = [];
+    document.querySelectorAll('.host-checkbox:checked').forEach(cb => selectedIPs.push(cb.dataset.ip));
+    if(selectedIPs.length === 0){ alert('请选择主机'); return; }
+    let cmd = prompt("输入命令"); if(!cmd) return;
+    socket.emit('exec_command', {cmd: cmd, ips: selectedIPs});
+}
+
+// 接收状态
+socket.on('status', function(data){
     var container = document.getElementById('hosts');
-    container.innerHTML = ''; // 每次清空重绘
+    container.innerHTML = '';
     for(var ip in data){
         var host = data[ip];
         var card = document.createElement('div');
         card.className = 'host-card';
-        var html = `<h5>${ip}</h5>`;
+        var html = `<input type="checkbox" class="host-checkbox" data-ip="${ip}"> <strong>${ip}</strong><br>`;
         if(host.error){
             html += `<p style="color:red">错误: ${host.error}</p>`;
         } else {
-            // CPU / 内存 / 磁盘进度条
             html += `
             <p>CPU: ${host.cpu}%</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-success" role="progressbar" style="width:${host.cpu}%"></div>
-            </div>
+            <div class="progress mb-1"><div class="progress-bar bg-success" style="width:${host.cpu}%"></div></div>
             <p>Memory: ${host.memory}%</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-info" role="progressbar" style="width:${host.memory}%"></div>
-            </div>
+            <div class="progress mb-1"><div class="progress-bar bg-info" style="width:${host.memory}%"></div></div>
             <p>Disk: ${host.disk}</p>
-            <div class="progress mb-1">
-                <div class="progress-bar bg-warning" role="progressbar" style="width:${host.disk.replace('%','')}%"></div>
-            </div>
+            <div class="progress mb-1"><div class="progress-bar bg-warning" style="width:${host.disk.replace('%','')}%"></div></div>
             <p>Latency: ${host.latency} ms</p>
-            `;
-
-            // 网络流量图表
-            html += `<canvas id="net-${ip}" class="chart-container"></canvas>`;
-
-            // 前五进程表格
-            html += `<table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
-            host.top_processes.forEach(p => {
-                html += `<tr><td>${p}</td></tr>`;
-            });
+            <canvas id="net-${ip}" class="chart-container"></canvas>
+            <table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
+            host.top_processes.forEach(p => { html += `<tr><td>${p}</td></tr>`; });
             html += `</tbody></table>`;
         }
         card.innerHTML = html;
         container.appendChild(card);
 
-        // 更新网络流量图表
         if(!host.error){
             var ctx = document.getElementById(`net-${ip}`).getContext('2d');
-            var rx = parseInt(host.net_rx)/1024; // KB
-            var tx = parseInt(host.net_tx)/1024; // KB
+            var rx = parseInt(host.net_rx)/1024, tx = parseInt(host.net_tx)/1024;
             if(netCharts[ip]){
                 netCharts[ip].data.datasets[0].data = [rx, tx];
                 netCharts[ip].update();
             } else {
                 netCharts[ip] = new Chart(ctx, {
                     type: 'bar',
-                    data: {
-                        labels: ['RX(KB)', 'TX(KB)'],
-                        datasets: [{
-                            label: '网络流量',
-                            data: [rx, tx],
-                            backgroundColor: ['#36a2eb','#ff6384']
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        animation: false,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true } }
-                    }
+                    data: { labels:['RX(KB)','TX(KB)'], datasets:[{label:'网络流量', data:[rx,tx], backgroundColor:['#36a2eb','#ff6384']}] },
+                    options:{responsive:true, animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}
                 });
             }
         }
     }
 });
 
-// 接收命令执行结果
-socket.on('cmd_result', function(data){
-    alert(JSON.stringify(data, null, 4));
-});
+// 命令执行结果
+socket.on('cmd_result', function(data){ alert(JSON.stringify(data,null,4)); });
 
-// 接收日志
+// 日志
 socket.on('log', function(data){
     var pre = document.getElementById('log');
     pre.textContent += data.msg + "\n";
-    pre.scrollTop = pre.scrollHeight; // 自动滚动到底部
+    pre.scrollTop = pre.scrollHeight;
 });
 
-// 执行命令
-function execCmd(){
-    var cmd = prompt("输入命令");
-    if(!cmd) return;
-    var ips = prompt("输入IP列表, 用逗号分隔").split(',');
-    socket.emit('exec_command', {cmd: cmd, ips: ips});
-}
+// 手动添加主机
+document.getElementById('manualForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var formData = new FormData(this);
+    fetch('/add_host', {method:'POST', body:formData}).then(r=>r.json()).then(()=>{ alert('添加成功'); });
+});
 
-// 设置刷新间隔
-function setIntervalSeconds(){
-    var sec = prompt("输入刷新间隔（秒）");
-    if(!sec) return;
-    socket.emit('set_interval', {interval: sec});
-}
-
-// 实时日志
-function tailLog(){
-    socket.emit('tail_log');
-}
+// AWS 导入
+document.getElementById('awsForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var formData = new FormData(this);
+    fetch('/import_aws', {method:'POST', body:formData}).then(r=>r.json()).then(()=>{ alert('导入成功'); });
+});
 </script>
 </body>
 </html>
