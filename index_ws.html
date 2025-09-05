@@ -17,6 +17,7 @@
 
 <h3>SSH WebSocket 面板</h3>
 
+<!-- 手动添加 Host -->
 <div class="mb-3">
   <h5>手动添加 Host</h5>
   <div class="row g-2">
@@ -27,6 +28,7 @@
   </div>
 </div>
 
+<!-- 批量导入 AWS -->
 <div class="mb-3">
   <h5>批量导入 AWS</h5>
   <textarea id="aws_accounts" class="form-control" rows="4" placeholder="名称----AccessKey----SecretKey"></textarea>
@@ -37,11 +39,16 @@
   <pre id="aws_log"></pre>
 </div>
 
+<!-- 实例列表 -->
 <div class="mb-3">
   <h5>实例列表</h5>
+  <div class="mb-1">
+    <input type="checkbox" id="select_all"> 全选 / 全不选
+  </div>
   <table class="table table-bordered" id="hosts_table">
     <thead>
       <tr>
+        <th>选择</th>
         <th>IP</th>
         <th>Region</th>
         <th>来源</th>
@@ -57,10 +64,19 @@
   </table>
 </div>
 
+<!-- 命令执行 & 日志 -->
 <div class="mb-3">
   <h5>命令执行 & 日志</h5>
   <input id="cmd_input" type="text" class="form-control" placeholder="输入命令">
   <button id="exec_cmd_btn" class="btn btn-warning mt-2">执行命令</button>
+
+  <!-- 刷新间隔 -->
+  <div class="mt-2 mb-2">
+    <label for="refresh_interval" class="form-label">刷新间隔 (秒):</label>
+    <input id="refresh_interval" type="number" class="form-control" value="5" min="1" style="width:100px; display:inline-block;">
+    <button id="set_interval_btn" class="btn btn-secondary">设置</button>
+  </div>
+
   <pre id="log_box"></pre>
 </div>
 
@@ -68,6 +84,25 @@
 const socket = io();
 let hosts = [];
 let status_data = {};
+let refresh_interval = 5000;
+let status_timer = null;
+let log_timer = null;
+
+// 定时刷新状态和日志
+function start_refresh_timers(){
+    if(status_timer) clearInterval(status_timer);
+    if(log_timer) clearInterval(log_timer);
+    status_timer = setInterval(()=>{ socket.emit('request_status'); }, refresh_interval);
+    log_timer = setInterval(()=>{ socket.emit('request_log'); }, refresh_interval);
+}
+
+// 加载 hosts 列表
+function load_hosts(){
+    $.get("/get_hosts", function(res){
+        hosts = res;
+        refresh_table();
+    });
+}
 
 // 刷新表格
 function refresh_table(){
@@ -81,6 +116,7 @@ function refresh_table(){
         const net_tx = s.net_tx||'0';
         const latency = s.latency||'--';
         const row = `<tr>
+            <td><input type="checkbox" class="host_checkbox" data-ip="${h.ip}"></td>
             <td>${h.ip}</td>
             <td>${h.region||''}</td>
             <td>${h.source}</td>
@@ -95,15 +131,10 @@ function refresh_table(){
     });
 }
 
-// 获取 hosts 列表
-function load_hosts(){
-    $.get("/get_hosts", function(res){
-        hosts = res;
-    });
-}
-
+// 页面加载
 $(document).ready(function(){
     load_hosts();
+    start_refresh_timers();
 
     // 手动添加 host
     $("#add_host_btn").click(function(){
@@ -111,22 +142,21 @@ $(document).ready(function(){
             ip: $("#add_ip").val(),
             username: $("#add_username").val(),
             password: $("#add_password").val()
-        }, function(){ load_hosts(); });
+        }, ()=>{ load_hosts(); });
     });
 
-    // 批量导入 AWS
+    // AWS 导入
     $("#import_aws_btn").click(function(){
         $("#aws_progress").css('width','0%').text('0%');
         $("#aws_log").empty();
-        $.post("/import_aws", {accounts: $("#aws_accounts").val()}, function(res){
-            console.log("AWS 导入启动");
-        });
+        $.post("/import_aws",{accounts: $("#aws_accounts").val()});
     });
 
-    // 执行命令
+    // 批量执行命令
     $("#exec_cmd_btn").click(function(){
         const cmd = $("#cmd_input").val();
-        const ips = hosts.map(h=>h.ip);
+        const ips = $(".host_checkbox:checked").map(function(){ return $(this).data('ip'); }).get();
+        if(ips.length===0){ alert('请先选择主机'); return; }
         socket.emit('exec_command', {cmd, ips});
     });
 
@@ -135,6 +165,20 @@ $(document).ready(function(){
         const ip = $(this).data('ip');
         const cmd = $("#cmd_input").val();
         socket.emit('exec_command', {cmd, ips:[ip]});
+    });
+
+    // 全选/全不选
+    $("#select_all").click(function(){
+        $(".host_checkbox").prop('checked', this.checked);
+    });
+
+    // 设置刷新间隔
+    $("#set_interval_btn").click(function(){
+        let sec = parseInt($("#refresh_interval").val());
+        if(isNaN(sec) || sec < 1) sec = 5;
+        refresh_interval = sec * 1000;
+        start_refresh_timers();
+        alert(`刷新间隔设置为 ${sec} 秒`);
     });
 
     // WebSocket 事件
