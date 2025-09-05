@@ -58,8 +58,23 @@ install_python() {
 # ---------- 安装 Python 库 ----------
 install_python_packages() {
     echo "安装 Python 库..."
-    pip3 install --upgrade pip
-    pip3 install flask paramiko boto3 requests
+
+    if [ "$OS" == "debian" ]; then
+        # 先尝试 apt 安装
+        sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests || true
+    fi
+
+    # 检查是否缺包
+    missing=false
+    for pkg in flask paramiko boto3 requests; do
+        python3 -c "import $pkg" 2>/dev/null || missing=true
+    done
+
+    if [ "$missing" = true ]; then
+        echo "部分库缺失，使用 pip 安装..."
+        pip3 install --upgrade pip --break-system-packages
+        pip3 install flask paramiko boto3 requests --break-system-packages
+    fi
 }
 
 # ---------- 创建日志文件 ----------
@@ -93,7 +108,7 @@ EOL
 
     sudo systemctl daemon-reload
     sudo systemctl enable ssh_web_panel
-    sudo systemctl start ssh_web_panel
+    sudo systemctl restart ssh_web_panel
     echo "systemd 服务已启动，开机自启，日志文件：$LOG_FILE"
 }
 
