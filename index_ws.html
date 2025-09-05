@@ -9,40 +9,43 @@
         .host-card { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
         .progress { height: 20px; }
         .chart-container { width: 300px; height: 100px; }
-        .form-inline { margin-bottom: 20px; }
+        .form-inline input { margin-right: 10px; }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>SSH WebSocket 面板</h1>
 
-    <!-- 控制按钮 -->
+    <!-- 手动添加主机 -->
+    <div class="mb-3">
+        <h5>手动添加主机</h5>
+        <div class="form-inline">
+            <input type="text" id="manual_ip" placeholder="IP">
+            <input type="text" id="manual_port" placeholder="端口" value="22">
+            <input type="text" id="manual_user" placeholder="用户名" value="root">
+            <input type="password" id="manual_pass" placeholder="密码">
+            <button class="btn btn-primary" onclick="addHost()">添加</button>
+        </div>
+    </div>
+
+    <!-- AWS 导入 -->
+    <div class="mb-3">
+        <h5>AWS 导入</h5>
+        <textarea id="aws_accounts" class="form-control" rows="3" placeholder="格式: 任意备注----AccessKey----SecretKey"></textarea>
+        <button class="btn btn-success mt-2" onclick="importAWS()">导入 AWS</button>
+    </div>
+
+    <!-- 功能按钮 -->
     <div class="mb-3">
         <button class="btn btn-primary" onclick="execCmd()">执行命令</button>
         <button class="btn btn-secondary" onclick="setIntervalSeconds()">设置刷新间隔</button>
         <button class="btn btn-info" onclick="tailLog()">实时日志</button>
     </div>
 
-    <!-- 手动添加主机 -->
-    <div class="form-inline mb-3">
-        <h5>手动添加主机</h5>
-        <input type="text" id="host_ip" placeholder="IP" class="form-control mx-1">
-        <input type="text" id="host_port" placeholder="端口" class="form-control mx-1" value="22">
-        <input type="text" id="host_user" placeholder="用户名" class="form-control mx-1" value="root">
-        <input type="text" id="host_pass" placeholder="密码" class="form-control mx-1">
-        <button class="btn btn-success" onclick="addHost()">添加</button>
-    </div>
-
-    <!-- AWS 导入 -->
-    <div class="form-inline mb-3">
-        <h5>AWS 导入</h5>
-        <textarea id="aws_accounts" placeholder="每行格式：任意前缀----AccessKey----SecretKey" class="form-control mx-1" rows="3" style="width:400px"></textarea>
-        <button class="btn btn-warning" onclick="importAWS()">导入</button>
-    </div>
-
-    <!-- 主机显示区 -->
+    <!-- 主机列表 -->
     <div id="hosts"></div>
 
+    <!-- 日志 -->
     <h3>日志</h3>
     <pre id="log" style="height:300px; overflow:auto; border:1px solid #ccc; padding:5px;"></pre>
 </div>
@@ -82,15 +85,15 @@ socket.on('status', function(data) {
                 <div class="progress-bar bg-warning" role="progressbar" style="width:${host.disk.replace('%','')}%"></div>
             </div>
             <p>Latency: ${host.latency} ms</p>
-            `;
-            html += `<canvas id="net-${ip}" class="chart-container"></canvas>`;
-            html += `<table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
-            host.top_processes.forEach(p => { html += `<tr><td>${p}</td></tr>`; });
+            <canvas id="net-${ip}" class="chart-container"></canvas>
+            <table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
+            host.top_processes.forEach(p => { html += `<tr><td>${p}</td></tr>` });
             html += `</tbody></table>`;
         }
         card.innerHTML = html;
         container.appendChild(card);
 
+        // 更新网络流量图表
         if(!host.error){
             var ctx = document.getElementById(`net-${ip}`).getContext('2d');
             var rx = parseInt(host.net_rx)/1024;
@@ -101,62 +104,31 @@ socket.on('status', function(data) {
             } else {
                 netCharts[ip] = new Chart(ctx, {
                     type: 'bar',
-                    data: {
-                        labels: ['RX(KB)', 'TX(KB)'],
-                        datasets: [{
-                            label: '网络流量',
-                            data: [rx, tx],
-                            backgroundColor: ['#36a2eb','#ff6384']
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        animation: false,
-                        plugins: { legend: { display: false } },
-                        scales: { y: { beginAtZero: true } }
-                    }
+                    data: { labels:['RX(KB)','TX(KB)'], datasets:[{label:'网络流量',data:[rx,tx],backgroundColor:['#36a2eb','#ff6384']}] },
+                    options: { responsive:true, animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
                 });
             }
         }
     }
 });
 
-// 命令结果
-socket.on('cmd_result', function(data){
-    alert(JSON.stringify(data, null, 4));
-});
+// 接收命令结果
+socket.on('cmd_result', function(data){ alert(JSON.stringify(data,null,4)); });
 
-// 日志
+// 接收日志
 socket.on('log', function(data){
     var pre = document.getElementById('log');
     pre.textContent += data.msg + "\n";
     pre.scrollTop = pre.scrollHeight;
 });
 
-// ---------------- 功能函数 ----------------
-function execCmd(){
-    var cmd = prompt("输入命令");
-    if(!cmd) return;
-    var ips = prompt("输入IP列表, 用逗号分隔").split(',');
-    socket.emit('exec_command', {cmd: cmd, ips: ips});
-}
-
-function setIntervalSeconds(){
-    var sec = prompt("输入刷新间隔（秒）");
-    if(!sec) return;
-    socket.emit('set_interval', {interval: sec});
-}
-
-function tailLog(){
-    socket.emit('tail_log');
-}
-
+// 手动添加主机
 function addHost(){
-    var ip = document.getElementById('host_ip').value;
-    var port = document.getElementById('host_port').value || 22;
-    var user = document.getElementById('host_user').value || 'root';
-    var pass = document.getElementById('host_pass').value || '';
-    if(!ip){ alert('请输入IP'); return; }
+    var ip = document.getElementById('manual_ip').value;
+    var port = document.getElementById('manual_port').value || 22;
+    var user = document.getElementById('manual_user').value || 'root';
+    var pass = document.getElementById('manual_pass').value || '';
+    if(!ip){ alert('IP不能为空'); return; }
 
     var formData = new FormData();
     formData.append('ip', ip);
@@ -164,11 +136,15 @@ function addHost(){
     formData.append('username', user);
     formData.append('password', pass);
 
-    fetch('/add_host', {method:'POST', body: formData})
-    .then(res => res.json())
-    .then(res => alert('添加成功'));
+    fetch('/add_host', {method:'POST', body:formData})
+    .then(res=>res.json())
+    .then(res=>{
+        alert('添加完成');
+        socket.emit('refresh_hosts');
+    });
 }
 
+// AWS 导入
 function importAWS(){
     var accounts = document.getElementById('aws_accounts').value;
     if(!accounts){ alert('请输入AWS账号'); return; }
@@ -178,8 +154,30 @@ function importAWS(){
 
     fetch('/import_aws', {method:'POST', body: formData})
     .then(res => res.json())
-    .then(res => alert('导入完成'));
+    .then(res => {
+        alert('导入完成，正在刷新主机状态...');
+        socket.emit('refresh_hosts');
+    });
 }
+
+// 执行命令
+function execCmd(){
+    var cmd = prompt("输入命令");
+    if(!cmd) return;
+    var ips = prompt("输入IP列表, 用逗号分隔").split(',');
+    socket.emit('exec_command', {cmd: cmd, ips: ips});
+}
+
+// 设置刷新间隔
+function setIntervalSeconds(){
+    var sec = prompt("输入刷新间隔（秒）");
+    if(!sec) return;
+    socket.emit('set_interval', {interval: sec});
+}
+
+// 实时日志
+function tailLog(){ socket.emit('tail_log'); }
+
 </script>
 </body>
 </html>
