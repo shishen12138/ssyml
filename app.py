@@ -1,27 +1,12 @@
 # -*- coding: utf-8 -*-
-import os
-import json
-import asyncio
-import asyncssh
-import eventlet
-import threading
-import boto3
-import sys
-import ssl
+import os, json, asyncio, asyncssh, threading, boto3
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
-
-# -------------------- 修复 SSL 递归问题 --------------------
-sys.setrecursionlimit(5000)  # 临时增加递归深度
-ssl._create_default_https_context = ssl._create_stdlib_context  # 修复 eventlet monkey_patch 导致的 ssl recursion
-
-# -------------------- eventlet patch --------------------
-eventlet.monkey_patch(socket=True, select=True, thread=True, time=True, os=True)  # 不 patch ssl
 
 # -------------------- Flask + SocketIO --------------------
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, async_mode='eventlet')
+socketio = SocketIO(app, async_mode='asgi')  # 使用 asyncio，不用 eventlet
 
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
@@ -31,18 +16,6 @@ BATCH_DELAY = 1
 status_loop_started = False
 status_loop_lock = threading.Lock()
 connected_clients = set()
-
-# -------------------- 小工具 --------------------
-def log_msg(msg):
-    try:
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(msg + "\n")
-    except:
-        pass
-    try:
-        socketio.emit('log', {'msg': msg})
-    except:
-        pass
 
 # -------------------- 文件操作 --------------------
 def ensure_hosts_file():
@@ -54,16 +27,15 @@ def ensure_hosts_file():
 def load_hosts():
     ensure_hosts_file()
     try:
-        with open(HOSTS_FILE, 'r', encoding='utf-8') as f:
+        with open(HOSTS_FILE,'r',encoding='utf-8') as f:
             return json.load(f)
     except:
         return []
 
 def save_hosts(hosts):
-    # 按 IP 去重，保留最后一条
     dedup = {h.get('ip'): h for h in hosts if h.get('ip')}
     ensure_hosts_file()
-    with open(HOSTS_FILE, 'w', encoding='utf-8') as f:
+    with open(HOSTS_FILE,'w',encoding='utf-8') as f:
         json.dump(list(dedup.values()), f, indent=4, ensure_ascii=False)
 
 # -------------------- SSH 状态 --------------------
@@ -73,8 +45,8 @@ async def async_ssh_status(host):
         async with asyncssh.connect(
             host['ip'],
             port=host.get('port', 22),
-            username=host.get('username', 'root'),
-            password=host.get('password', 'Qcy1994@06'),
+            username=host.get('username','root'),
+            password=host.get('password','Qcy1994@06'),
             known_hosts=None,
             timeout=5
         ) as conn:
@@ -110,28 +82,27 @@ def start_status_loop():
             return
         status_loop_started = True
 
-    def loop():
+    async def loop():
         while True:
             if not connected_clients:
-                eventlet.sleep(1)
+                await asyncio.sleep(1)
                 continue
             hosts = load_hosts()
             if not hosts:
-                eventlet.sleep(REFRESH_INTERVAL)
+                await asyncio.sleep(REFRESH_INTERVAL)
                 continue
-            async def get_status_batch():
-                tasks = [async_ssh_status(h) for h in hosts]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                all_data = {}
-                for h, r in zip(hosts, results):
-                    if isinstance(r, Exception):
-                        all_data[h.get('ip','unknown')] = {'error': str(r)}
-                    else:
-                        all_data[h['ip']] = r
-                socketio.emit('status', all_data)
-            eventlet.spawn(asyncio.run, get_status_batch())
-            eventlet.sleep(REFRESH_INTERVAL)
-    eventlet.spawn(loop)
+            tasks = [async_ssh_status(h) for h in hosts]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_data = {}
+            for h, r in zip(hosts, results):
+                if isinstance(r, Exception):
+                    all_data[h.get('ip','unknown')] = {'error': str(r)}
+                else:
+                    all_data[h['ip']] = r
+            socketio.emit('status', all_data)
+            await asyncio.sleep(REFRESH_INTERVAL)
+
+    threading.Thread(target=lambda: asyncio.run(loop()), daemon=True).start()
 
 # -------------------- 执行命令 --------------------
 async def run_command_pty(host, cmd, sid):
@@ -164,9 +135,9 @@ def handle_exec_command(data):
     async def exec_seq():
         for h in selected_hosts:
             await run_command_pty(h, cmd, request.sid)
-            eventlet.sleep(1)
+            await asyncio.sleep(BATCH_DELAY)
 
-    eventlet.spawn(asyncio.run, exec_seq())
+    threading.Thread(target=lambda: asyncio.run(exec_seq()), daemon=True).start()
 
 # -------------------- WebSocket --------------------
 @socketio.on('connect')
