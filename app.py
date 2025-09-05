@@ -8,8 +8,9 @@ import os
 import eventlet
 import threading
 import subprocess
+import time
 
-eventlet.monkey_patch()  # async 与 Flask-SocketIO 兼容
+eventlet.monkey_patch()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -17,11 +18,15 @@ socketio = SocketIO(app, async_mode='eventlet')
 
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
+AWS_LOG_FILE = '/root/ssh_panel/aws_import.log'
 
 REFRESH_INTERVAL_DEFAULT = 5
 status_loop_started = False
 status_loop_lock = threading.Lock()
-connected_clients = set()  # 当前连接客户端 session_id
+connected_clients = set()       # SSH 状态客户端
+aws_log_clients = set()         # AWS 日志客户端
+hosts_clients = set()           # hosts 实时刷新客户端
+LAST_HOSTS = []
 
 # -------------------- 文件操作 --------------------
 def load_hosts():
@@ -76,7 +81,7 @@ async def async_ssh_connect(host):
         result['error'] = str(e)
     return result
 
-# -------------------- 后台实时刷新 --------------------
+# -------------------- 后台 SSH 状态刷新 --------------------
 def start_status_loop():
     global status_loop_started
     with status_loop_lock:
@@ -84,14 +89,13 @@ def start_status_loop():
             return
         status_loop_started = True
 
-    BATCH_SIZE = 5  # 每批主机数，可调
+    BATCH_SIZE = 5
 
     async def worker_loop():
         while True:
             if not connected_clients:
                 await asyncio.sleep(1)
                 continue
-
             hosts = load_hosts()
             for i in range(0, len(hosts), BATCH_SIZE):
                 batch = hosts[i:i+BATCH_SIZE]
@@ -108,7 +112,7 @@ def start_status_loop():
 
     eventlet.spawn(loop_func)
 
-# -------------------- WebSocket --------------------
+# -------------------- WebSocket 连接 --------------------
 @socketio.on('connect')
 def handle_connect():
     emit('log', {'msg': '连接成功！'})
@@ -118,7 +122,10 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     connected_clients.discard(request.sid)
+    aws_log_clients.discard(request.sid)
+    hosts_clients.discard(request.sid)
 
+# -------------------- 异步命令执行 --------------------
 @socketio.on('exec_command')
 def handle_exec_command(data):
     cmd = data.get('cmd')
@@ -126,21 +133,36 @@ def handle_exec_command(data):
     hosts = load_hosts()
     selected_hosts = [h for h in hosts if h['ip'] in ips]
 
-    async def send_cmd_batch(batch):
-        results = await asyncio.gather(*(async_ssh_connect(h) for h in batch))
-        for h, r in zip(batch, results):
-            socketio.emit('cmd_result', {h['ip']: r})
-
     def thread_func():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        BATCH_SIZE = 5
-        for i in range(0, len(selected_hosts), BATCH_SIZE):
-            batch = selected_hosts[i:i+BATCH_SIZE]
+
+        async def run_host_cmd(host):
             try:
-                loop.run_until_complete(send_cmd_batch(batch))
+                conn = await asyncssh.connect(
+                    host['ip'],
+                    port=host.get('port', 22),
+                    username=host.get('username', 'root'),
+                    password=host.get('password', ''),
+                    known_hosts=None,
+                    connect_timeout=5
+                )
+                process = await conn.create_process(cmd)
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    socketio.emit('cmd_result', {host['ip']: line.strip()})
+                await process.wait()
+                conn.close()
             except Exception as e:
-                socketio.emit('log', {'msg': f"命令执行错误: {e}"})
+                socketio.emit('cmd_result', {host['ip']: f"ERROR: {e}"})
+
+        async def main():
+            tasks = [run_host_cmd(h) for h in selected_hosts]
+            await asyncio.gather(*tasks)
+
+        loop.run_until_complete(main())
 
     eventlet.spawn(thread_func)
 
@@ -150,11 +172,63 @@ def import_aws_route():
     accounts_file = '/tmp/aws_accounts.txt'
     with open(accounts_file, 'w') as f:
         f.write(request.form['accounts'])
-
-    # 调用独立 AWS 导入脚本，不在 Flask 线程中执行
     subprocess.Popen(['python3', '/root/ssh_panel/aws_importer.py', accounts_file])
-
     return jsonify({"status": "ok", "msg": "AWS 导入已启动，导入日志在 /root/ssh_panel/aws_import.log"})
+
+# -------------------- AWS 日志实时推送 --------------------
+@socketio.on('subscribe_aws_log')
+def handle_subscribe_aws_log():
+    aws_log_clients.add(request.sid)
+    emit('log', {'msg': '已订阅 AWS 导入日志'})
+    eventlet.spawn(push_aws_log_loop)
+
+@socketio.on('unsubscribe_aws_log')
+def handle_unsubscribe_aws_log():
+    aws_log_clients.discard(request.sid)
+
+def push_aws_log_loop():
+    last_size = 0
+    while aws_log_clients:
+        if os.path.exists(AWS_LOG_FILE):
+            with open(AWS_LOG_FILE, 'r') as f:
+                lines = f.read().splitlines()
+                new_lines = lines[last_size:]
+                last_size = len(lines)
+                for line in new_lines:
+                    for sid in list(aws_log_clients):
+                        try:
+                            socketio.emit('log', {'msg': line}, room=sid)
+                        except:
+                            aws_log_clients.discard(sid)
+        eventlet.sleep(1)
+
+# -------------------- hosts 实时刷新 --------------------
+@socketio.on('subscribe_hosts')
+def handle_subscribe_hosts():
+    hosts_clients.add(request.sid)
+    emit('log', {'msg': '已订阅 hosts 实时刷新'})
+    eventlet.spawn(push_hosts_loop)
+
+@socketio.on('unsubscribe_hosts')
+def handle_unsubscribe_hosts():
+    hosts_clients.discard(request.sid)
+
+def push_hosts_loop():
+    global LAST_HOSTS
+    while hosts_clients:
+        try:
+            hosts = load_hosts()
+            if hosts != LAST_HOSTS:
+                all_data = {h['ip']: h for h in hosts}
+                for sid in list(hosts_clients):
+                    try:
+                        socketio.emit('status', all_data, room=sid)
+                    except:
+                        hosts_clients.discard(sid)
+                LAST_HOSTS = hosts
+        except Exception as e:
+            print(f"hosts 推送错误: {e}")
+        eventlet.sleep(2)
 
 # -------------------- 其他路由 --------------------
 @app.route('/add_host', methods=['POST'])
