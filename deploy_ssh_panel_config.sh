@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ---------- 默认配置（无需交互） ----------
-PANEL_DIR="/ssh_panel"
+PANEL_DIR="/root/ssh_panel"
 PANEL_PORT=12138
 LOG_FILE="$PANEL_DIR/ssh_web_panel.log"
 
