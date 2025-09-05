@@ -186,8 +186,15 @@ def add_host():
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
-    accounts_raw = request.form['accounts']
-    accounts = [line.strip().split(',') for line in accounts_raw.splitlines() if ',' in line]
+    accounts_raw = request.form['accounts']  # 每行格式：任意前缀----AccessKey----SecretKey
+    accounts = []
+    for line in accounts_raw.splitlines():
+        parts = line.strip().split('----')
+        if len(parts) >= 3:
+            access_key = parts[-2].strip()
+            secret_key = parts[-1].strip()
+            accounts.append((access_key, secret_key))
+
     ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
                    'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
     for access_key, secret_key in accounts:
@@ -195,8 +202,8 @@ def import_aws():
             try:
                 ec2 = boto3.client(
                     'ec2',
-                    aws_access_key_id=access_key.strip(),
-                    aws_secret_access_key=secret_key.strip(),
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
                     region_name=region
                 )
                 reservations = ec2.describe_instances()['Reservations']
