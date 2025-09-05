@@ -98,7 +98,8 @@ socket.on('status', function(data){
 
         if(!host.error){
             var ctx = document.getElementById(`net-${ip}`).getContext('2d');
-            var rx = parseInt(host.net_rx)/1024, tx = parseInt(host.net_tx)/1024;
+            var rx = parseInt(host.net_rx) || 0, tx = parseInt(host.net_tx) || 0;
+            rx = rx/1024; tx = tx/1024;
             if(netCharts[ip]){
                 netCharts[ip].data.datasets[0].data = [rx, tx];
                 netCharts[ip].update();
@@ -113,8 +114,12 @@ socket.on('status', function(data){
     }
 });
 
-// 命令执行结果
-socket.on('cmd_result', function(data){ alert(JSON.stringify(data,null,4)); });
+// 命令执行结果显示到日志
+socket.on('cmd_result', function(data){
+    var pre = document.getElementById('log');
+    pre.textContent += "[CMD RESULT] " + JSON.stringify(data,null,4) + "\n";
+    pre.scrollTop = pre.scrollHeight;
+});
 
 // 日志
 socket.on('log', function(data){
@@ -136,6 +141,9 @@ document.getElementById('awsForm').addEventListener('submit', function(e){
     var formData = new FormData(this);
     fetch('/import_aws', {method:'POST', body:formData}).then(r=>r.json()).then(()=>{ alert('导入成功'); });
 });
+
+// 实时日志
+function tailLog(){ socket.emit('tail_log'); }
 </script>
 </body>
 </html>
