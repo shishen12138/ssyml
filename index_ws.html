@@ -1,236 +1,146 @@
-# -*- coding: utf-8 -*-
-from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO, emit
-import asyncio
-import asyncssh
-import boto3
-import json
-import os
-import eventlet
-import threading
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSH WebSocket 面板</title>
+    <script src="//cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .host-card { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
+        .progress { height: 20px; }
+        .chart-container { width: 300px; height: 100px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>SSH WebSocket 面板</h1>
+    <div class="mb-3">
+        <button class="btn btn-primary" onclick="execCmd()">执行命令</button>
+        <button class="btn btn-secondary" onclick="setIntervalSeconds()">设置刷新间隔</button>
+        <button class="btn btn-info" onclick="tailLog()">实时日志</button>
+    </div>
 
-eventlet.monkey_patch()  # 必须打补丁让 async 与 Flask-SocketIO 兼容
+    <div id="hosts"></div>
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, async_mode='eventlet')
+    <h3>日志</h3>
+    <pre id="log" style="height:300px; overflow:auto; border:1px solid #ccc; padding:5px;"></pre>
+</div>
 
-HOSTS_FILE = '/root/ssh_panel/hosts.json'
-LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
+<script>
+var socket = io();
 
-REFRESH_INTERVAL_DEFAULT = 5
-status_loop_started = False
-status_loop_lock = threading.Lock()
-connected_clients = set()  # 保存当前连接客户端 session_id
+// 保存 chart 对象
+var netCharts = {};
 
-# -------------------- 文件操作 --------------------
-def load_hosts():
-    if not os.path.exists(HOSTS_FILE):
-        return []
-    with open(HOSTS_FILE, 'r') as f:
-        return json.load(f)
+// 连接成功
+socket.on('connect', function() {
+    console.log('连接成功');
+});
 
-def save_hosts(hosts):
-    with open(HOSTS_FILE, 'w') as f:
-        json.dump(hosts, f, indent=4)
+// 接收实时状态
+socket.on('status', function(data) {
+    var container = document.getElementById('hosts');
+    container.innerHTML = ''; // 每次清空重绘
+    for(var ip in data){
+        var host = data[ip];
+        var card = document.createElement('div');
+        card.className = 'host-card';
+        var html = `<h5>${ip}</h5>`;
+        if(host.error){
+            html += `<p style="color:red">错误: ${host.error}</p>`;
+        } else {
+            // CPU / 内存 / 磁盘进度条
+            html += `
+            <p>CPU: ${host.cpu}%</p>
+            <div class="progress mb-1">
+                <div class="progress-bar bg-success" role="progressbar" style="width:${host.cpu}%"></div>
+            </div>
+            <p>Memory: ${host.memory}%</p>
+            <div class="progress mb-1">
+                <div class="progress-bar bg-info" role="progressbar" style="width:${host.memory}%"></div>
+            </div>
+            <p>Disk: ${host.disk}</p>
+            <div class="progress mb-1">
+                <div class="progress-bar bg-warning" role="progressbar" style="width:${host.disk.replace('%','')}%"></div>
+            </div>
+            <p>Latency: ${host.latency} ms</p>
+            `;
 
-# -------------------- 异步 SSH --------------------
-async def async_ssh_connect(host):
-    result = {}
-    try:
-        conn = await asyncssh.connect(
-            host['ip'],
-            port=host.get('port', 22),
-            username=host.get('username', 'root'),
-            password=host.get('password', ''),
-            known_hosts=None,
-            timeout=5
-        )
+            // 网络流量图表
+            html += `<canvas id="net-${ip}" class="chart-container"></canvas>`;
 
-        cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
-        memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
-        disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
-        net_info = await (await conn.create_process(
-            "cat /proc/net/dev | grep -v lo | awk 'NR>1{print $1,$2,$10}' | head -n1"
-        )).stdout.read()
-        if net_info:
-            parts = net_info.split()
-            net_rx = parts[1]
-            net_tx = parts[2]
-        else:
-            net_rx = net_tx = 'N/A'
-        latency = await (await conn.create_process("ping -c 1 8.8.8.8 | tail -1 | awk -F '/' '{print $5}'")).stdout.read()
-        top_processes = await (await conn.create_process("ps aux --sort=-%cpu | head -n 6")).stdout.read()
+            // 前五进程表格
+            html += `<table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
+            host.top_processes.forEach(p => {
+                html += `<tr><td>${p}</td></tr>`;
+            });
+            html += `</tbody></table>`;
+        }
+        card.innerHTML = html;
+        container.appendChild(card);
 
-        result.update({
-            'cpu': cpu.strip(),
-            'memory': memory.strip(),
-            'disk': disk.strip(),
-            'net_rx': net_rx,
-            'net_tx': net_tx,
-            'latency': latency.strip(),
-            'top_processes': top_processes.strip().split('\n')
-        })
-        conn.close()
-    except Exception as e:
-        result['error'] = str(e)
-    return result
+        // 更新网络流量图表
+        if(!host.error){
+            var ctx = document.getElementById(`net-${ip}`).getContext('2d');
+            var rx = parseInt(host.net_rx)/1024; // KB
+            var tx = parseInt(host.net_tx)/1024; // KB
+            if(netCharts[ip]){
+                netCharts[ip].data.datasets[0].data = [rx, tx];
+                netCharts[ip].update();
+            } else {
+                netCharts[ip] = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['RX(KB)', 'TX(KB)'],
+                        datasets: [{
+                            label: '网络流量',
+                            data: [rx, tx],
+                            backgroundColor: ['#36a2eb','#ff6384']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        animation: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+            }
+        }
+    }
+});
 
-async def async_exec_command(host, cmd):
-    try:
-        conn = await asyncssh.connect(
-            host['ip'],
-            port=host.get('port', 22),
-            username=host.get('username', 'root'),
-            password=host.get('password', ''),
-            known_hosts=None,
-            timeout=5
-        )
-        process = await conn.create_process(cmd)
-        out = await process.stdout.read()
-        err = await process.stderr.read()
-        conn.close()
-        return out + err
-    except Exception as e:
-        return str(e)
+// 接收命令执行结果
+socket.on('cmd_result', function(data){
+    alert(JSON.stringify(data, null, 4));
+});
 
-# -------------------- 后台实时刷新 --------------------
-def start_status_loop():
-    """后台循环，按需异步推送状态"""
-    global status_loop_started
-    with status_loop_lock:
-        if status_loop_started:
-            return
-        status_loop_started = True
+// 接收日志
+socket.on('log', function(data){
+    var pre = document.getElementById('log');
+    pre.textContent += data.msg + "\n";
+    pre.scrollTop = pre.scrollHeight; // 自动滚动到底部
+});
 
-    def loop():
-        while True:
-            if not connected_clients:
-                eventlet.sleep(1)
-                continue
-            hosts = load_hosts()
-            async def get_status():
-                tasks = [async_ssh_connect(h) for h in hosts]
-                results = await asyncio.gather(*tasks)
-                all_data = {h['ip']: r for h, r in zip(hosts, results)}
-                socketio.emit('status', all_data)
-            eventlet.spawn(asyncio.run, get_status())
-            eventlet.sleep(REFRESH_INTERVAL_DEFAULT)
-    eventlet.spawn(loop)
+// 执行命令
+function execCmd(){
+    var cmd = prompt("输入命令");
+    if(!cmd) return;
+    var ips = prompt("输入IP列表, 用逗号分隔").split(',');
+    socket.emit('exec_command', {cmd: cmd, ips: ips});
+}
 
-# -------------------- WebSocket --------------------
-@socketio.on('connect')
-def handle_connect():
-    emit('log', {'msg': '连接成功！'})
-    connected_clients.add(request.sid)
-    start_status_loop()
+// 设置刷新间隔
+function setIntervalSeconds(){
+    var sec = prompt("输入刷新间隔（秒）");
+    if(!sec) return;
+    socket.emit('set_interval', {interval: sec});
+}
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    if request.sid in connected_clients:
-        connected_clients.remove(request.sid)
-
-@socketio.on('exec_command')
-def handle_exec_command(data):
-    cmd = data.get('cmd')
-    ips = data.get('ips', [])
-    hosts = load_hosts()
-    selected_hosts = [h for h in hosts if h['ip'] in ips]
-
-    async def send_cmd():
-        results = await asyncio.gather(*(async_exec_command(h, cmd) for h in selected_hosts))
-        socketio.emit('cmd_result', {h['ip']: r for h, r in zip(selected_hosts, results)})
-    eventlet.spawn(asyncio.run, send_cmd())
-
-@socketio.on('tail_log')
-def handle_tail_log():
-    def tail_f(file_path):
-        if not os.path.exists(file_path):
-            socketio.emit('log', {'msg': '日志文件不存在'})
-            return
-        with open(file_path, 'r') as f:
-            f.seek(0, os.SEEK_END)
-            while True:
-                line = f.readline()
-                if not line:
-                    eventlet.sleep(0.5)
-                    continue
-                socketio.emit('log', {'msg': line.strip()})
-    eventlet.spawn(tail_f, LOG_FILE)
-
-@socketio.on('set_interval')
-def handle_set_interval(data):
-    global REFRESH_INTERVAL_DEFAULT
-    interval = int(data.get('interval', REFRESH_INTERVAL_DEFAULT))
-    REFRESH_INTERVAL_DEFAULT = max(1, interval)
-    emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
-
-# -------------------- 原功能路由 --------------------
-@app.route('/add_host', methods=['POST'])
-def add_host():
-    hosts = load_hosts()
-    ip = request.form['ip']
-    port = int(request.form.get('port', 22))
-    username = request.form.get('username', 'root')
-    password = request.form.get('password', '')
-    hosts.append({
-        "ip": ip,
-        "port": port,
-        "username": username,
-        "password": password,
-        "source": "manual"
-    })
-    save_hosts(hosts)
-    return jsonify({"status":"ok"})
-
-@app.route('/import_aws', methods=['POST'])
-def import_aws():
-    hosts = load_hosts()
-    accounts_raw = request.form['accounts']
-    accounts = [line.strip().split(',') for line in accounts_raw.splitlines() if ',' in line]
-    ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
-                   'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
-    for access_key, secret_key in accounts:
-        for region in ALL_REGIONS:
-            try:
-                ec2 = boto3.client(
-                    'ec2',
-                    aws_access_key_id=access_key.strip(),
-                    aws_secret_access_key=secret_key.strip(),
-                    region_name=region
-                )
-                reservations = ec2.describe_instances()['Reservations']
-                for res in reservations:
-                    for inst in res['Instances']:
-                        ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                        if ip:
-                            hosts.append({
-                                "ip": ip,
-                                "port": 22,
-                                "username": "root",
-                                "password": "",
-                                "region": region,
-                                "source": "aws"
-                            })
-            except Exception as e:
-                print(f"[{region}] Error: {e}")
-    save_hosts(hosts)
-    return jsonify({"status":"ok"})
-
-@app.route('/log')
-def log():
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, 'r') as f:
-            content = f.read()
-        return "<pre style='white-space: pre-wrap;'>"+content+"</pre>"
-    return "日志文件不存在"
-
-@app.route('/')
-def index():
-    return render_template('index_ws.html')  # 前端 WebSocket 可视化页面
-
-# -------------------- 启动 --------------------
-if __name__ == '__main__':
-    port = int(os.environ.get("PANEL_PORT", 12138))
-    host = '0.0.0.0'
-    socketio.run(app, host=host, port=port, debug=False)
+// 实时日志
+function tailLog(){
+    socket.emit('tail_log');
+}
+</script>
+</body>
+</html>
