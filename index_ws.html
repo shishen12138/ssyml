@@ -1,144 +1,174 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
+<meta charset="UTF-8">
 <title>SSH WebSocket 面板</title>
-<script src="//cdn.socket.io/4.6.1/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+<script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.0/dist/jquery.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" rel="stylesheet">
 <style>
-.host-card{margin-bottom:20px;padding:10px;border:1px solid #ccc;border-radius:8px;}
-.progress{height:20px;}
-.chart-container{width:300px;height:100px;}
-pre{max-height:200px;overflow:auto;white-space: pre-wrap;word-break: break-word;}
-#terminal-container div{margin-bottom:15px;}
+  body { padding: 20px; }
+  #hosts_table td, #hosts_table th { vertical-align: middle; }
+  .progress { height: 20px; }
+  #log_box, #aws_log { height: 200px; overflow-y: scroll; background:#f7f7f7; padding:10px; border:1px solid #ccc; }
 </style>
 </head>
 <body>
-<div class="container">
-<h1>SSH WebSocket 面板</h1>
+
+<h3>SSH WebSocket 面板</h3>
 
 <div class="mb-3">
-<form id="manualForm" class="row g-2">
-<div class="col"><input type="text" class="form-control" name="ip" placeholder="IP" required></div>
-<div class="col"><input type="number" class="form-control" name="port" placeholder="端口" value="22"></div>
-<div class="col"><input type="text" class="form-control" name="username" placeholder="用户名" value="root"></div>
-<div class="col"><input type="password" class="form-control" name="password" placeholder="密码" value="Qcy1994@06"></div>
-<div class="col"><button type="submit" class="btn btn-primary w-100">添加主机</button></div>
-</form>
+  <h5>手动添加 Host</h5>
+  <div class="row g-2">
+    <div class="col"><input id="add_ip" type="text" class="form-control" placeholder="IP"></div>
+    <div class="col"><input id="add_username" type="text" class="form-control" placeholder="用户名" value="root"></div>
+    <div class="col"><input id="add_password" type="text" class="form-control" placeholder="密码" value="Qcy1994@06"></div>
+    <div class="col"><button id="add_host_btn" class="btn btn-primary">添加</button></div>
+  </div>
 </div>
 
 <div class="mb-3">
-<form id="awsForm">
-<textarea class="form-control mb-2" name="accounts" placeholder="每行: 任意名称----AccessKey----SecretKey"></textarea>
-<button type="submit" class="btn btn-success">导入 AWS 实例</button>
-</form>
+  <h5>批量导入 AWS</h5>
+  <textarea id="aws_accounts" class="form-control" rows="4" placeholder="名称----AccessKey----SecretKey"></textarea>
+  <button id="import_aws_btn" class="btn btn-success mt-2">开始导入</button>
+  <div class="progress mt-1">
+    <div id="aws_progress" class="progress-bar" role="progressbar" style="width:0%">0%</div>
+  </div>
+  <pre id="aws_log"></pre>
 </div>
 
 <div class="mb-3">
-<button class="btn btn-warning" onclick="execSelectedCmd()">批量执行命令</button>
-<button class="btn btn-secondary" onclick="selectAll()">全选</button>
-<button class="btn btn-secondary" onclick="deselectAll()">全不选</button>
-<button class="btn btn-info" onclick="tailLog()">实时日志</button>
+  <h5>实例列表</h5>
+  <table class="table table-bordered" id="hosts_table">
+    <thead>
+      <tr>
+        <th>IP</th>
+        <th>Region</th>
+        <th>来源</th>
+        <th>CPU %</th>
+        <th>内存 %</th>
+        <th>上传</th>
+        <th>下载</th>
+        <th>延迟 ms</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 </div>
 
 <div class="mb-3">
-<label>批量延迟(秒):</label>
-<input type="number" id="batchDelay" value="1" min="0" step="0.5">
-<button class="btn btn-sm btn-info" onclick="setBatchDelay()">设置</button>
-<button class="btn btn-sm btn-secondary" onclick="viewLog()">查看日志</button>
+  <h5>命令执行 & 日志</h5>
+  <input id="cmd_input" type="text" class="form-control" placeholder="输入命令">
+  <button id="exec_cmd_btn" class="btn btn-warning mt-2">执行命令</button>
+  <pre id="log_box"></pre>
 </div>
-
-<div id="hosts"></div>
-
-<h3>日志</h3>
-<pre id="log" style="height:300px; overflow:auto; border:1px solid #ccc; padding:5px;"></pre>
-
-<h3>终端输出</h3>
-<div id="terminal-container"></div>
 
 <script>
-var socket=io(),netCharts={},terminals={};
+const socket = io();
+let hosts = [];
+let status_data = {};
 
-function selectAll(){ document.querySelectorAll('.host-checkbox').forEach(cb=>cb.checked=true);}
-function deselectAll(){ document.querySelectorAll('.host-checkbox').forEach(cb=>cb.checked=false);}
-
-function execSelectedCmd(){
-    let selectedIPs=[];
-    document.querySelectorAll('.host-checkbox:checked').forEach(cb=>selectedIPs.push(cb.dataset.ip));
-    if(selectedIPs.length===0){ alert('请选择主机'); return;}
-    let cmd=prompt("输入命令"); if(!cmd) return;
-
-    selectedIPs.forEach(ip=>{
-        let termDiv=document.createElement('div');
-        termDiv.innerHTML=`<h4>${ip}</h4><div id="term-${ip}" style="height:200px;background:black;"></div>`;
-        document.getElementById('terminal-container').appendChild(termDiv);
-        let term=new Terminal();
-        term.open(document.getElementById(`term-${ip}`));
-        terminals[ip]=term;
+// 刷新表格
+function refresh_table(){
+    const tbody = $("#hosts_table tbody");
+    tbody.empty();
+    hosts.forEach(h=>{
+        const s = status_data[h.ip] || {};
+        const cpu = s.cpu||'--';
+        const mem = s.memory||'--';
+        const net_rx = s.net_rx||'0';
+        const net_tx = s.net_tx||'0';
+        const latency = s.latency||'--';
+        const row = `<tr>
+            <td>${h.ip}</td>
+            <td>${h.region||''}</td>
+            <td>${h.source}</td>
+            <td><div class="progress"><div class="progress-bar" style="width:${cpu}%">${cpu}</div></div></td>
+            <td><div class="progress"><div class="progress-bar bg-info" style="width:${mem}%">${mem}</div></div></td>
+            <td>${net_tx}</td>
+            <td>${net_rx}</td>
+            <td>${latency}</td>
+            <td><button class="btn btn-sm btn-primary exec-btn" data-ip="${h.ip}">执行</button></td>
+        </tr>`;
+        tbody.append(row);
     });
-
-    socket.emit('exec_command',{cmd:cmd, ips:selectedIPs});
 }
 
-socket.on('cmd_output',function(data){
-    let term=terminals[data.ip]; if(term) term.writeln(data.line.replace(/\n/g,''));
-});
-socket.on('cmd_done',function(data){
-    let term=terminals[data.ip]; if(term) term.writeln("\n=== 执行完成 ===");
-});
+// 获取 hosts 列表
+function load_hosts(){
+    $.get("/get_hosts", function(res){
+        hosts = res;
+    });
+}
 
-socket.on('status',function(data){
-    var container=document.getElementById('hosts'); container.innerHTML='';
-    for(var ip in data){
-        var host=data[ip]; var card=document.createElement('div'); card.className='host-card';
-        var html=`<input type="checkbox" class="host-checkbox" data-ip="${ip}"> <strong>${ip}</strong><br>`;
-        if(host.error){ html+=`<p style="color:red">错误:${host.error}</p>`;}
-        else{
-            html+=`<p>CPU:${host.cpu}%</p><div class="progress mb-1"><div class="progress-bar bg-success" style="width:${host.cpu}%"></div></div>
-                   <p>Memory:${host.memory}%</p><div class="progress mb-1"><div class="progress-bar bg-info" style="width:${host.memory}%"></div></div>
-                   <p>Disk:${host.disk}</p><div class="progress mb-1"><div class="progress-bar bg-warning" style="width:${host.disk.replace('%','')}%"></div></div>
-                   <p>Latency:${host.latency} ms</p>
-                   <canvas id="net-${ip}" class="chart-container"></canvas>
-                   <table class="table table-sm table-bordered mt-2"><thead><tr><th>进程</th></tr></thead><tbody>`;
-            host.top_processes.forEach(p=>{ html+=`<tr><td>${p}</td></tr>`; });
-            html+=`</tbody></table>`;
-        }
-        card.innerHTML=html; container.appendChild(card);
+$(document).ready(function(){
+    load_hosts();
 
-        if(!host.error){
-            var ctx=document.getElementById(`net-${ip}`).getContext('2d');
-            var rx=parseInt(host.net_rx)/1024, tx=parseInt(host.net_tx)/1024;
-            if(netCharts[ip]){ netCharts[ip].data.datasets[0].data=[rx,tx]; netCharts[ip].update();}
-            else{
-                netCharts[ip]=new Chart(ctx,{type:'bar',
-                    data:{labels:['RX(KB)','TX(KB)'], datasets:[{label:'网络流量',data:[rx,tx],backgroundColor:['#36a2eb','#ff6384']}]},
-                    options:{responsive:true, animation:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}
-                });
-            }
-        }
-    }
-});
+    // 手动添加 host
+    $("#add_host_btn").click(function(){
+        $.post("/add_host", {
+            ip: $("#add_ip").val(),
+            username: $("#add_username").val(),
+            password: $("#add_password").val()
+        }, function(){ load_hosts(); });
+    });
 
-socket.on('log',function(data){
-    var pre=document.getElementById('log'); pre.textContent+=data.msg+"\n"; pre.scrollTop=pre.scrollHeight;
-});
+    // 批量导入 AWS
+    $("#import_aws_btn").click(function(){
+        $("#aws_progress").css('width','0%').text('0%');
+        $("#aws_log").empty();
+        $.post("/import_aws", {accounts: $("#aws_accounts").val()}, function(res){
+            console.log("AWS 导入启动");
+        });
+    });
 
-document.getElementById('manualForm').addEventListener('submit',function(e){
-    e.preventDefault();
-    var formData=new FormData(this);
-    fetch('/add_host',{method:'POST', body:formData}).then(r=>r.json()).then(()=>{alert('添加成功');});
-});
-document.getElementById('awsForm').addEventListener('submit',function(e){
-    e.preventDefault();
-    var formData=new FormData(this);
-    fetch('/import_aws',{method:'POST',body:formData}).then(r=>r.json()).then(()=>{alert('导入成功');});
-});
+    // 执行命令
+    $("#exec_cmd_btn").click(function(){
+        const cmd = $("#cmd_input").val();
+        const ips = hosts.map(h=>h.ip);
+        socket.emit('exec_command', {cmd, ips});
+    });
 
-function tailLog(){ socket.emit('tail_log'); }
-function setBatchDelay(){ socket.emit('set_batch_delay',{delay: parseFloat(document.getElementById('batchDelay').value)}); }
-function viewLog(){ window.open('/log','_blank'); }
+    // 单实例执行命令
+    $(document).on('click','.exec-btn', function(){
+        const ip = $(this).data('ip');
+        const cmd = $("#cmd_input").val();
+        socket.emit('exec_command', {cmd, ips:[ip]});
+    });
+
+    // WebSocket 事件
+    socket.on('status', function(data){
+        status_data = data;
+        refresh_table();
+    });
+
+    socket.on('cmd_output', function(d){
+        $("#log_box").append(`[${d.ip}] ${d.line}\n`);
+        $("#log_box").scrollTop($("#log_box")[0].scrollHeight);
+    });
+
+    socket.on('log', function(d){
+        $("#log_box").append(d.msg+"\n");
+        $("#log_box").scrollTop($("#log_box")[0].scrollHeight);
+    });
+
+    socket.on('aws_import_log', function(d){
+        $("#aws_log").append(d.msg+"\n");
+        $("#aws_log").scrollTop($("#aws_log")[0].scrollHeight);
+    });
+
+    socket.on('aws_import_progress', function(d){
+        $("#aws_progress").css('width', d.progress+'%').text(d.progress+'%');
+    });
+
+    socket.on('aws_import_complete', function(){
+        load_hosts();
+        $("#aws_log").append("导入完成\n");
+        $("#aws_progress").css('width','100%').text('100%');
+    });
+});
 </script>
+
 </body>
 </html>
