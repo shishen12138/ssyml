@@ -96,27 +96,36 @@ async def async_exec_command(host, cmd):
 
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
-    """后台循环，按需异步推送状态"""
     global status_loop_started
     with status_loop_lock:
         if status_loop_started:
             return
         status_loop_started = True
 
-    def loop():
+    async def get_status_batch(host_batch):
+        tasks = [async_ssh_connect(h) for h in host_batch]
+        results = await asyncio.gather(*tasks)
+        return {h['ip']: r for h, r in zip(host_batch, results)}
+
+    def loop_func():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        BATCH_SIZE = 10
         while True:
             if not connected_clients:
                 eventlet.sleep(1)
                 continue
             hosts = load_hosts()
-            async def get_status():
-                tasks = [async_ssh_connect(h) for h in hosts]
-                results = await asyncio.gather(*tasks)
-                all_data = {h['ip']: r for h, r in zip(hosts, results)}
-                socketio.emit('status', all_data)
-            eventlet.spawn(asyncio.run, get_status())
+            for i in range(0, len(hosts), BATCH_SIZE):
+                batch = hosts[i:i+BATCH_SIZE]
+                try:
+                    data = loop.run_until_complete(get_status_batch(batch))
+                    socketio.emit('status', data)
+                except Exception as e:
+                    socketio.emit('log', {'msg': f"获取状态错误: {e}"})
             eventlet.sleep(REFRESH_INTERVAL_DEFAULT)
-    eventlet.spawn(loop)
+
+    eventlet.spawn(loop_func)
 
 # -------------------- WebSocket --------------------
 @socketio.on('connect')
@@ -136,53 +145,24 @@ def handle_exec_command(data):
     hosts = load_hosts()
     selected_hosts = [h for h in hosts if h['ip'] in ips]
 
-    async def send_cmd():
-        results = await asyncio.gather(*(async_exec_command(h, cmd) for h in selected_hosts))
-        socketio.emit('cmd_result', {h['ip']: r for h, r in zip(selected_hosts, results)})
-    eventlet.spawn(asyncio.run, send_cmd())
+    async def send_cmd_batch(batch):
+        results = await asyncio.gather(*(async_exec_command(h, cmd) for h in batch))
+        socketio.emit('cmd_result', {h['ip']: r for h, r in zip(batch, results)})
 
-@socketio.on('tail_log')
-def handle_tail_log():
-    def tail_f(file_path):
-        if not os.path.exists(file_path):
-            socketio.emit('log', {'msg': '日志文件不存在'})
-            return
-        with open(file_path, 'r') as f:
-            f.seek(0, os.SEEK_END)
-            while True:
-                line = f.readline()
-                if not line:
-                    eventlet.sleep(0.5)
-                    continue
-                socketio.emit('log', {'msg': line.strip()})
-    eventlet.spawn(tail_f, LOG_FILE)
+    def thread_func():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        BATCH_SIZE = 5
+        for i in range(0, len(selected_hosts), BATCH_SIZE):
+            batch = selected_hosts[i:i+BATCH_SIZE]
+            try:
+                loop.run_until_complete(send_cmd_batch(batch))
+            except Exception as e:
+                socketio.emit('log', {'msg': f"命令执行错误: {e}"})
 
-@socketio.on('set_interval')
-def handle_set_interval(data):
-    global REFRESH_INTERVAL_DEFAULT
-    interval = int(data.get('interval', REFRESH_INTERVAL_DEFAULT))
-    REFRESH_INTERVAL_DEFAULT = max(1, interval)
-    emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
+    eventlet.spawn(thread_func)
 
-# -------------------- 原功能路由 --------------------
-@app.route('/add_host', methods=['POST'])
-def add_host():
-    hosts = load_hosts()
-    ip = request.form['ip']
-    port = int(request.form.get('port', 22))
-    username = request.form.get('username', 'root')
-    password = request.form.get('password', 'Qcy1994@06')
-    hosts.append({
-        "ip": ip,
-        "port": port,
-        "username": username,
-        "password": password,
-        "source": "manual"
-    })
-    save_hosts(hosts)
-    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
-    return jsonify({"status":"ok"})
-
+# -------------------- AWS 导入 --------------------
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
@@ -195,7 +175,7 @@ def import_aws():
             parts = line.strip().split('----')
             if len(parts) >= 3:
                 accounts.append((parts[1].strip(), parts[2].strip()))
-        
+
         socketio.emit('log', {'msg': f"开始导入 AWS 账号，总账号数 {len(accounts)}"})
 
         for i in range(0, len(accounts), 5):
@@ -214,28 +194,30 @@ def import_aws():
                     socketio.emit('log', {'msg': f"账号 {idx} 获取区域失败: {e}"})
                     continue
 
+                # 分批处理区域
                 for j in range(0, len(all_regions), 5):
                     region_batch = all_regions[j:j+5]
                     for region in region_batch:
                         socketio.emit('log', {'msg': f"账号 {idx} 连接区域: {region}"})
                         try:
                             ec2 = session.client('ec2', region_name=region)
-                            reservations = ec2.describe_instances().get('Reservations', [])
-                            for res in reservations:
-                                for inst in res.get('Instances', []):
-                                    ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                                    if ip:
-                                        host_info = {
-                                            "ip": ip,
-                                            "port": 22,
-                                            "username": "root",
-                                            "password": "Qcy1994@06",
-                                            "region": region,
-                                            "source": "aws"
-                                        }
-                                        hosts.append(host_info)
-                                        new_hosts.append(host_info)
-                                        socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 添加实例 {ip}"})
+                            paginator = ec2.get_paginator('describe_instances')
+                            for page in paginator.paginate():
+                                for res in page.get('Reservations', []):
+                                    for inst in res.get('Instances', []):
+                                        ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
+                                        if ip:
+                                            host_info = {
+                                                "ip": ip,
+                                                "port": 22,
+                                                "username": "root",
+                                                "password": "Qcy1994@06",
+                                                "region": region,
+                                                "source": "aws"
+                                            }
+                                            hosts.append(host_info)
+                                            new_hosts.append(host_info)
+                                            socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 添加实例 {ip}"})
                         except Exception as e:
                             socketio.emit('log', {'msg': f"账号 {idx} 区域 {region} 出现错误: {e}"})
 
@@ -245,6 +227,25 @@ def import_aws():
 
     threading.Thread(target=import_thread).start()
     return jsonify({"status": "ok"})
+
+# -------------------- 其他路由 --------------------
+@app.route('/add_host', methods=['POST'])
+def add_host():
+    hosts = load_hosts()
+    ip = request.form['ip']
+    port = int(request.form.get('port', 22))
+    username = request.form.get('username', 'root')
+    password = request.form.get('password', 'Qcy1994@06')
+    hosts.append({
+        "ip": ip,
+        "port": port,
+        "username": username,
+        "password": password,
+        "source": "manual"
+    })
+    save_hosts(hosts)
+    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
+    return jsonify({"status":"ok"})
 
 @app.route('/log')
 def log_route():
@@ -256,7 +257,7 @@ def log_route():
 
 @app.route('/')
 def index():
-    return render_template('index_ws.html')  # WebSocket 前端页面
+    return render_template('index_ws.html')
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
