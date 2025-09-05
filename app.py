@@ -9,19 +9,19 @@ import os
 import eventlet
 import threading
 
-eventlet.monkey_patch()  # async + Flask-SocketIO 兼容
+eventlet.monkey_patch()  # async 与 Flask-SocketIO 兼容
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, async_mode='eventlet')
 
-HOSTS_FILE = './hosts.json'
-LOG_FILE = './ssh_web_panel.log'
+HOSTS_FILE = '/root/ssh_panel/hosts.json'
+LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
 
 REFRESH_INTERVAL_DEFAULT = 5
 status_loop_started = False
 status_loop_lock = threading.Lock()
-connected_clients = set()
+connected_clients = set()  # 当前连接客户端 session_id
 
 # -------------------- 文件操作 --------------------
 def load_hosts():
@@ -42,10 +42,11 @@ async def async_ssh_connect(host):
             host['ip'],
             port=host.get('port', 22),
             username=host.get('username', 'root'),
-            password=host.get('password', 'Qcy1994@06'),
+            password=host.get('password', ''),
             known_hosts=None,
             connect_timeout=5
         )
+
         cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
         memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
         disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
@@ -81,9 +82,9 @@ async def async_exec_command(host, cmd):
             host['ip'],
             port=host.get('port', 22),
             username=host.get('username', 'root'),
-            password=host.get('password', 'Qcy1994@06'),
+            password=host.get('password', ''),
             known_hosts=None,
-            timeout=5
+            connect_timeout=5
         )
         process = await conn.create_process(cmd)
         out = await process.stdout.read()
@@ -95,6 +96,7 @@ async def async_exec_command(host, cmd):
 
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
+    """后台循环，按需异步推送状态"""
     global status_loop_started
     with status_loop_lock:
         if status_loop_started:
@@ -162,16 +164,6 @@ def handle_set_interval(data):
     REFRESH_INTERVAL_DEFAULT = max(1, interval)
     emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
 
-@socketio.on('refresh_hosts')
-def handle_refresh_hosts():
-    hosts = load_hosts()
-    async def push_status():
-        tasks = [async_ssh_connect(h) for h in hosts]
-        results = await asyncio.gather(*tasks)
-        all_data = {h['ip']: r for h, r in zip(hosts, results)}
-        socketio.emit('status', all_data)
-    eventlet.spawn(asyncio.run, push_status())
-
 # -------------------- 原功能路由 --------------------
 @app.route('/add_host', methods=['POST'])
 def add_host():
@@ -179,59 +171,68 @@ def add_host():
     ip = request.form['ip']
     port = int(request.form.get('port', 22))
     username = request.form.get('username', 'root')
-    password = request.form.get('password', 'Qcy1994@06')
+    password = request.form.get('password', '')
     hosts.append({
         "ip": ip,
         "port": port,
-        "username": "root",
-        "password": "Qcy1994@06",
+        "username": username,
+        "password": password,
         "source": "manual"
     })
     save_hosts(hosts)
+    # 推送新主机到前端
+    socketio.emit('status', {ip: {'cpu': '-', 'memory': '-', 'disk': '-', 'net_rx': '-', 'net_tx': '-', 'latency': '-', 'top_processes': ['手动添加主机'], 'error': ''}})
     return jsonify({"status":"ok"})
 
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
     accounts_raw = request.form['accounts']
-    accounts = [line.strip().split('----')[1:] for line in accounts_raw.splitlines() if '----' in line]
-    ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
-                   'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
+    accounts = []
+    for line in accounts_raw.splitlines():
+        parts = line.strip().split('----')
+        if len(parts) >= 3:
+            access_key = parts[1].strip()
+            secret_key = parts[2].strip()
+            accounts.append((access_key, secret_key))
+
+    ALL_REGIONS = [
+        'us-east-1','us-east-2','us-west-1','us-west-2',
+        'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1'
+    ]
+
+    new_hosts = []
     for access_key, secret_key in accounts:
         for region in ALL_REGIONS:
             try:
                 ec2 = boto3.client(
                     'ec2',
-                    aws_access_key_id=access_key.strip(),
-                    aws_secret_access_key=secret_key.strip(),
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
                     region_name=region
                 )
-                reservations = ec2.describe_instances()['Reservations']
+                reservations = ec2.describe_instances().get('Reservations', [])
                 for res in reservations:
-                    for inst in res['Instances']:
+                    for inst in res.get('Instances', []):
                         ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
                         if ip:
-                            hosts.append({
+                            host_info = {
                                 "ip": ip,
                                 "port": 22,
                                 "username": "root",
                                 "password": "",
                                 "region": region,
                                 "source": "aws"
-                            })
+                            }
+                            hosts.append(host_info)
+                            new_hosts.append(host_info)
             except Exception as e:
-                print(f"[{region}] Error: {e}")
+                print(f"[{region}] AWS Error: {e}")
+
     save_hosts(hosts)
-
-    # 自动推送状态到前端
-    async def push_status():
-        tasks = [async_ssh_connect(h) for h in hosts]
-        results = await asyncio.gather(*tasks)
-        all_data = {h['ip']: r for h, r in zip(hosts, results)}
-        socketio.emit('status', all_data)
-    eventlet.spawn(asyncio.run, push_status())
-
-    return jsonify({"status":"ok"})
+    # 推送新 AWS 主机到前端
+    socketio.emit('status', {h['ip']: {'cpu':'-','memory':'-','disk':'-','net_rx':'-','net_tx':'-','latency':'-','top_processes':['AWS 主机导入'], 'error':''} for h in new_hosts})
+    return jsonify({"status":"ok","added":len(new_hosts)})
 
 @app.route('/log')
 def log():
@@ -243,7 +244,7 @@ def log():
 
 @app.route('/')
 def index():
-    return render_template('index_ws.html')
+    return render_template('index_ws.html')  # WebSocket 前端页面
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
