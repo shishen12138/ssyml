@@ -19,7 +19,7 @@ done
 # 下载 templates 目录
 mkdir -p templates
 for file in "${TEMPLATES[@]}"; do
-    curl -fsSL "$BASE_URL/templates/$file" -o "templates/$file" || { echo "下载 templates/$file 失败"; exit 1; }
+    curl -fsSL "$BASE_URL/$file" -o "templates/$file" || { echo "下载 templates/$file 失败"; exit 1; }
 done
 
 # ---------- 3. 设置权限 ----------
