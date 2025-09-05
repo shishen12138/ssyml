@@ -170,7 +170,8 @@ def import_aws():
         socketio.emit('status', {h['ip']: h for h in hosts})
 
     threading.Thread(target=import_thread).start()
-    return jsonify({"status":"ok"})
+    return jsonify({"status":"ok", "msg":"AWS 导入任务已启动"})
+
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
