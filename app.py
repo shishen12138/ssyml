@@ -9,19 +9,19 @@ import os
 import eventlet
 import threading
 
-eventlet.monkey_patch()  # 必须打补丁让 async 与 Flask-SocketIO 兼容
+eventlet.monkey_patch()  # async + Flask-SocketIO 兼容
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, async_mode='eventlet')
 
-HOSTS_FILE = '/root/ssh_panel/hosts.json'
-LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
+HOSTS_FILE = './hosts.json'
+LOG_FILE = './ssh_web_panel.log'
 
 REFRESH_INTERVAL_DEFAULT = 5
 status_loop_started = False
 status_loop_lock = threading.Lock()
-connected_clients = set()  # 保存当前连接客户端 session_id
+connected_clients = set()
 
 # -------------------- 文件操作 --------------------
 def load_hosts():
@@ -46,7 +46,6 @@ async def async_ssh_connect(host):
             known_hosts=None,
             timeout=5
         )
-
         cpu = await (await conn.create_process("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")).stdout.read()
         memory = await (await conn.create_process("free -m | awk 'NR==2{printf \"%.2f\", $3*100/$2 }'")).stdout.read()
         disk = await (await conn.create_process("df -h / | awk 'NR==2 {print $5}'")).stdout.read()
@@ -96,7 +95,6 @@ async def async_exec_command(host, cmd):
 
 # -------------------- 后台实时刷新 --------------------
 def start_status_loop():
-    """后台循环，按需异步推送状态"""
     global status_loop_started
     with status_loop_lock:
         if status_loop_started:
@@ -127,8 +125,7 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    if request.sid in connected_clients:
-        connected_clients.remove(request.sid)
+    connected_clients.discard(request.sid)
 
 @socketio.on('exec_command')
 def handle_exec_command(data):
@@ -165,6 +162,16 @@ def handle_set_interval(data):
     REFRESH_INTERVAL_DEFAULT = max(1, interval)
     emit('log', {'msg': f'刷新间隔已设置为 {REFRESH_INTERVAL_DEFAULT} 秒'})
 
+@socketio.on('refresh_hosts')
+def handle_refresh_hosts():
+    hosts = load_hosts()
+    async def push_status():
+        tasks = [async_ssh_connect(h) for h in hosts]
+        results = await asyncio.gather(*tasks)
+        all_data = {h['ip']: r for h, r in zip(hosts, results)}
+        socketio.emit('status', all_data)
+    eventlet.spawn(asyncio.run, push_status())
+
 # -------------------- 原功能路由 --------------------
 @app.route('/add_host', methods=['POST'])
 def add_host():
@@ -186,15 +193,8 @@ def add_host():
 @app.route('/import_aws', methods=['POST'])
 def import_aws():
     hosts = load_hosts()
-    accounts_raw = request.form['accounts']  # 每行格式：任意前缀----AccessKey----SecretKey
-    accounts = []
-    for line in accounts_raw.splitlines():
-        parts = line.strip().split('----')
-        if len(parts) >= 3:
-            access_key = parts[-2].strip()
-            secret_key = parts[-1].strip()
-            accounts.append((access_key, secret_key))
-
+    accounts_raw = request.form['accounts']
+    accounts = [line.strip().split('----')[1:] for line in accounts_raw.splitlines() if '----' in line]
     ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
                    'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
     for access_key, secret_key in accounts:
@@ -202,8 +202,8 @@ def import_aws():
             try:
                 ec2 = boto3.client(
                     'ec2',
-                    aws_access_key_id=access_key,
-                    aws_secret_access_key=secret_key,
+                    aws_access_key_id=access_key.strip(),
+                    aws_secret_access_key=secret_key.strip(),
                     region_name=region
                 )
                 reservations = ec2.describe_instances()['Reservations']
@@ -222,6 +222,15 @@ def import_aws():
             except Exception as e:
                 print(f"[{region}] Error: {e}")
     save_hosts(hosts)
+
+    # 自动推送状态到前端
+    async def push_status():
+        tasks = [async_ssh_connect(h) for h in hosts]
+        results = await asyncio.gather(*tasks)
+        all_data = {h['ip']: r for h, r in zip(hosts, results)}
+        socketio.emit('status', all_data)
+    eventlet.spawn(asyncio.run, push_status())
+
     return jsonify({"status":"ok"})
 
 @app.route('/log')
@@ -234,7 +243,7 @@ def log():
 
 @app.route('/')
 def index():
-    return render_template('index_ws.html')  # 前端 WebSocket 可视化页面
+    return render_template('index_ws.html')
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
