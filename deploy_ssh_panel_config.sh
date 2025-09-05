@@ -48,7 +48,7 @@ install_python(){
 # ---------- 安装 Python 库 ----------
 install_python_packages(){
     echo "安装 Python 库..."
-    PIP_PACKAGES=("flask" "flask-socketio" "asyncssh" "paramiko" "boto3" "requests" "psutil" "eventlet")
+    PIP_PACKAGES=("flask" "flask-socketio" "asyncssh" "paramiko" "boto3" "requests" "psutil" "eventlet" "asyncssh")
     pip3 install --upgrade pip --break-system-packages
     pip3 install "${PIP_PACKAGES[@]}" --break-system-packages
 }
