@@ -7,6 +7,7 @@
     <style>
         .progress { height: 20px; }
         .form-inline input { margin-right: 10px; }
+        pre { margin: 0; }
     </style>
 </head>
 <body>
@@ -56,6 +57,18 @@
     <!-- 命令执行 -->
     <button class="btn btn-primary" onclick="execSelectedCmd()">执行选择的命令</button>
 
+    <!-- 命令执行结果 -->
+    <h3>命令执行结果</h3>
+    <table class="table table-bordered" id="cmd_results_table">
+        <thead>
+            <tr>
+                <th>IP</th>
+                <th>命令输出</th>
+            </tr>
+        </thead>
+        <tbody id="cmd_results_body"></tbody>
+    </table>
+
     <!-- 日志 -->
     <h3>日志</h3>
     <pre id="log" style="height:300px; overflow:auto; border:1px solid #ccc; padding:5px;"></pre>
@@ -91,7 +104,22 @@ socket.on('status', function(data){
     }
 });
 
-// ---------- 日志 ----------
+// ---------- 接收命令结果 ----------
+socket.on('cmd_result', function(data){
+    var tbody = document.getElementById('cmd_results_body');
+    tbody.innerHTML = '';
+    for(var ip in data){
+        var output = data[ip] || '';
+        var row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${ip}</td>
+            <td><pre style="white-space: pre-wrap;">${output}</pre></td>
+        `;
+        tbody.appendChild(row);
+    }
+});
+
+// ---------- 接收日志 ----------
 socket.on('log', function(data){
     var pre = document.getElementById('log');
     pre.textContent += data.msg + "\n";
@@ -111,6 +139,10 @@ function execSelectedCmd(){
     var ips = [];
     document.querySelectorAll('.host_select:checked').forEach(cb => ips.push(cb.dataset.ip));
     if(ips.length === 0){ alert("请至少选择一个主机"); return; }
+
+    // 清空之前结果
+    document.getElementById('cmd_results_body').innerHTML = '';
+
     socket.emit('exec_command', {cmd: cmd, ips: ips});
 }
 
@@ -161,6 +193,7 @@ function setIntervalSeconds(){
 
 // ---------- 实时日志 ----------
 function tailLog(){ socket.emit('tail_log'); }
+
 </script>
 </body>
 </html>
