@@ -36,10 +36,7 @@ def import_aws(accounts_raw):
 
     for idx, (access_key, secret_key) in enumerate(accounts, start=1):
         log(f"开始处理账号 {idx}")
-        session = boto3.Session(
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key
-        )
+        session = boto3.Session(aws_access_key_id=access_key, aws_secret_access_key=secret_key)
         try:
             ec2_client = session.client('ec2', region_name='us-east-1')
             regions_resp = ec2_client.describe_regions()['Regions']
@@ -52,23 +49,22 @@ def import_aws(accounts_raw):
             log(f"账号 {idx} 连接区域: {region}")
             try:
                 ec2 = session.client('ec2', region_name=region)
-                paginator = ec2.get_paginator('describe_instances')
-                for page in paginator.paginate():
-                    for res in page.get('Reservations', []):
-                        for inst in res.get('Instances', []):
-                            ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                            if ip:
-                                host_info = {
-                                    "ip": ip,
-                                    "port": 22,
-                                    "username": "root",
-                                    "password": "Qcy1994@06",
-                                    "region": region,
-                                    "source": "aws"
-                                }
-                                hosts.append(host_info)
-                                new_hosts.append(host_info)
-                                log(f"账号 {idx} 区域 {region} 添加实例 {ip}")
+                reservations = ec2.describe_instances().get('Reservations', [])
+                for res in reservations:
+                    for inst in res.get('Instances', []):
+                        ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
+                        if ip:
+                            host_info = {
+                                "ip": ip,
+                                "port": 22,
+                                "username": "root",
+                                "password": "Qcy1994@06",
+                                "region": region,
+                                "source": "aws"
+                            }
+                            hosts.append(host_info)
+                            new_hosts.append(host_info)
+                            log(f"账号 {idx} 区域 {region} 添加实例 {ip}")
             except Exception as e:
                 log(f"账号 {idx} 区域 {region} 出现错误: {e}")
 
@@ -76,12 +72,8 @@ def import_aws(accounts_raw):
     log(f"AWS 导入完成，共添加 {len(new_hosts)} 台主机")
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("请提供 AWS 账号信息文件路径")
-        sys.exit(1)
-
     accounts_file = sys.argv[1]
-    with open(accounts_file, 'r') as f:
-        accounts_raw = f.read()
-
-    import_aws(accounts_raw)
+    if os.path.exists(accounts_file):
+        with open(accounts_file, 'r') as f:
+            accounts_raw = f.read()
+        import_aws(accounts_raw)
