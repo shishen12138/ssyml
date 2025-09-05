@@ -85,7 +85,7 @@ async def run_command_pty(host, cmd, sid):
     try:
         async with asyncssh.connect(host['ip'], port=host.get('port',22),
                                     username=host.get('username','root'),
-                                    password=host.get('password','Qcy1994@06),
+                                    password=host.get('password','Qcy1994@06'),
                                     known_hosts=None) as conn:
             async with conn.create_process(cmd, term_type='xterm') as process:
                 async for line in process.stdout:
