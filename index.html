@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <title>SSH Web 面板</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.5/css/dataTables.bootstrap5.min.css">
     <style>
-        pre {background:#f8f9fa;padding:5px;margin:0;}
+        pre {background:#f8f9fa;padding:5px;margin:0; white-space: pre-wrap; word-break: break-word; max-height:200px; overflow-y:auto;}
         .table-responsive {max-height: 600px; overflow-y: auto;}
+        .progress {height: 20px;}
+        #logContent {background:#212529;color:#f8f9fa;padding:10px;height:300px;overflow-y:auto;font-size:14px;}
     </style>
 </head>
 <body>
@@ -26,7 +29,7 @@
 
     <!-- AWS 导入 -->
     <form id="awsForm" class="mb-3">
-        <textarea class="form-control mb-2" name="accounts" placeholder="输入 AWS Key，每行 AccessKey,SecretKey"></textarea>
+        <textarea class="form-control mb-2" name="accounts" placeholder="输入 AWS Key，每行 任意名称----AccessKey----SecretKey"></textarea>
         <button type="submit" class="btn btn-success">导入 AWS 实例</button>
     </form>
 
@@ -70,6 +73,12 @@
         </tbody>
     </table>
     </div>
+
+    <hr>
+
+    <!-- 面板日志 -->
+    <h4>面板运行日志</h4>
+    <div id="logContent">正在加载日志...</div>
 </div>
 
 <!-- 命令弹窗 -->
@@ -101,6 +110,7 @@
 let selectedIPs = [];
 let cmdModal = new bootstrap.Modal(document.getElementById('cmdModal'));
 
+// 刷新主机状态
 function refreshStatus(){
     $.get('/status', function(data){
         for(let ip in data){
@@ -126,17 +136,28 @@ function refreshStatus(){
     });
 }
 
+// 刷新日志
+function refreshLog(){
+    $.get('/log', function(data){
+        $('#logContent').text(data);
+        $('#logContent').scrollTop($('#logContent')[0].scrollHeight);
+    });
+}
+
 $(document).ready(function(){
     let table = $('#hostsTable').DataTable({scrollX:true});
-
     setInterval(refreshStatus, 5000);
+    setInterval(refreshLog, 5000);
     refreshStatus();
+    refreshLog();
 
+    // 添加手动主机
     $('#manualForm').submit(function(e){
         e.preventDefault();
         $.post('/add_host', $(this).serialize(), function(res){ location.reload(); });
     });
 
+    // AWS 导入
     $('#awsForm').submit(function(e){
         e.preventDefault();
         $.post('/import_aws', $(this).serialize(), function(res){ location.reload(); });
@@ -150,7 +171,7 @@ $(document).ready(function(){
         cmdModal.show();
     });
 
-    // 批量命令按钮
+    // 批量命令
     $('#batchCmdBtn').click(function(){
         selectedIPs = [];
         $('.host-checkbox:checked').each(function(){ selectedIPs.push($(this).data('ip')); });
@@ -160,6 +181,7 @@ $(document).ready(function(){
         cmdModal.show();
     });
 
+    // 执行命令
     $('#cmdRun').click(function(){
         let cmd = $('#cmdInput').val().trim();
         if(!cmd) return;
@@ -176,7 +198,7 @@ $(document).ready(function(){
         });
     });
 
-    // 全选复选框
+    // 全选
     $('#selectAll').click(function(){
         $('.host-checkbox').prop('checked', this.checked);
     });
