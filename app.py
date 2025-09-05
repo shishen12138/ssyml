@@ -158,30 +158,15 @@ def handle_set_interval(data):
     MAX_CONCURRENT_SSH = max(1, batch)
     emit('log', {'msg':f'刷新间隔 {REFRESH_INTERVAL_DEFAULT} 秒, 批量并发 {MAX_CONCURRENT_SSH}'})
 
-# -------------------- 路由 --------------------
-@app.route('/')
-def index():
-    return render_template('index_ws.html')
+# -------------------- AWS 导入 --------------------
+ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
+               'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
 
-@app.route('/add_host', methods=['POST'])
-def add_host():
+def import_aws_thread(accounts):
     hosts = load_hosts()
-    ip = request.form['ip']
-    port = int(request.form.get('port',22))
-    username = request.form.get('username','root')
-    password = request.form.get('password','Qcy1994@06')
-    hosts.append({"ip":ip,"port":port,"username":"root","password":"Qcy1994@06","source":"manual"})
-    save_hosts(hosts)
-    return jsonify({"status":"ok"})
-
-@app.route('/import_aws', methods=['POST'])
-def import_aws():
-    hosts = load_hosts()
-    accounts_raw = request.form['accounts']
-    accounts = [line.strip().split('----') for line in accounts_raw.splitlines() if '----' in line]
-    ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
-                   'eu-west-1','eu-central-1','ap-southeast-1','ap-northeast-1']
-    for _, access_key, secret_key in accounts:
+    total = len(accounts) * len(ALL_REGIONS)
+    count = 0
+    for name, access_key, secret_key in accounts:
         for region in ALL_REGIONS:
             try:
                 ec2 = boto3.client('ec2',
@@ -191,14 +176,52 @@ def import_aws():
                 reservations = ec2.describe_instances()['Reservations']
                 for res in reservations:
                     for inst in res['Instances']:
-                        ip = inst.get('PublicIpAddress') or inst.get('PrivateIpAddress')
-                        if ip:
-                            hosts.append({"ip":ip,"port":22,"username":"root","password":"Qcy1994@06","region":region,"source":"aws"})
+                        if inst.get('State', {}).get('Name') != 'running':
+                            continue
+                        ip = inst.get('PublicIpAddress')
+                        if not ip:
+                            continue
+                        hosts.append({
+                            "ip": ip,
+                            "port": 22,
+                            "username": "root",
+                            "password": "Qcy1994@06",
+                            "region": region,
+                            "source": "aws"
+                        })
+                msg = f"[{name}@{region}] 查询完成"
             except Exception as e:
-                print(f"[{region}] Error: {e}")
+                msg = f"[{name}@{region}] Error: {e}"
+            count += 1
+            socketio.emit('aws_import_log', {'msg': msg})
+            socketio.emit('aws_import_progress', {'progress': int(count/total*100)})
+    save_hosts(hosts)
+    socketio.emit('aws_import_complete')
+
+@app.route('/import_aws', methods=['POST'])
+def import_aws():
+    accounts_raw = request.form['accounts']
+    accounts = [line.strip().split('----') for line in accounts_raw.splitlines() if '----' in line]
+    threading.Thread(target=import_aws_thread, args=(accounts,), daemon=True).start()
+    return jsonify({"status":"started"})
+
+# -------------------- 手动添加 host --------------------
+@app.route('/add_host', methods=['POST'])
+def add_host():
+    hosts = load_hosts()
+    ip = request.form['ip']
+    port = int(request.form.get('port',22))
+    username = request.form.get('username','root')
+    password = request.form.get('password','Qcy1994@06')
+    hosts.append({"ip":ip,"port":port,"username":username,"password":password,"source":"manual"})
     save_hosts(hosts)
     return jsonify({"status":"ok"})
 
+@app.route('/get_hosts')
+def get_hosts():
+    return jsonify(load_hosts())
+
+# -------------------- 日志查看 --------------------
 @app.route('/log')
 def log_view():
     if os.path.exists(LOG_FILE):
@@ -206,6 +229,11 @@ def log_view():
             content = f.read()
         return f"<pre style='white-space: pre-wrap;'>{content}</pre>"
     return "日志文件不存在"
+
+# -------------------- 页面 --------------------
+@app.route('/')
+def index():
+    return render_template('index_aws.html')
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
