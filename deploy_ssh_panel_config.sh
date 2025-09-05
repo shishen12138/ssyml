@@ -45,12 +45,12 @@ install_python(){
     fi
 }
 
-# ---------- 安装 Python 库 ----------
+# ---------- 安装 Python 库（强制覆盖） ----------
 install_python_packages(){
-    echo "安装 Python 库..."
-    PIP_PACKAGES=("flask" "flask-socketio" "asyncssh" "paramiko" "boto3" "requests" "psutil" "eventlet" "asyncssh")
+    echo "安装 Python 库（强制覆盖安装）..."
     pip3 install --upgrade pip --break-system-packages
-    pip3 install "${PIP_PACKAGES[@]}" --break-system-packages
+    pip3 install --break-system-packages --ignore-installed \
+        flask flask-socketio eventlet asyncssh boto3 paramiko psutil requests
 }
 
 # ---------- 创建日志 ----------
