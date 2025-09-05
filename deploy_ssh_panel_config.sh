@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# ---------- 默认配置（无需交互） ----------
+# ---------- 默认配置 ----------
 PANEL_DIR="/root/ssh_panel"
 PANEL_PORT=12138
 LOG_FILE="$PANEL_DIR/ssh_web_panel.log"
 SERVICE_FILE="/etc/systemd/system/ssh_web_panel.service"
+APP_FILE="$PANEL_DIR/app.py"
 
 echo "配置如下:"
 echo "面板目录: $PANEL_DIR"
@@ -76,14 +77,14 @@ install_python() {
 # ---------- 安装 Python 库 ----------
 install_python_packages() {
     echo "安装 Python 库..."
-    PIP_PACKAGES=("flask" "paramiko" "boto3" "requests" "psutil")
+    PIP_PACKAGES=("flask" "paramiko" "boto3" "requests" "psutil" "flask-socketio" "eventlet" "asyncssh")
 
     # Debian 系统优先用 apt 安装部分库
     if [ "$OS" == "debian" ]; then
         sudo apt install -y python3-flask python3-paramiko python3-boto3 python3-requests python3-psutil python3-blinker python3-cryptography || true
     fi
 
-    # 检查是否缺包
+    # 检查缺失库
     missing=false
     for pkg in "${PIP_PACKAGES[@]}"; do
         python3 -c "import $pkg" 2>/dev/null || missing=true
@@ -107,9 +108,16 @@ prepare_log() {
 create_systemd_service() {
     echo "创建 systemd 服务..."
     sudo mkdir -p "$PANEL_DIR"
+
+    # 检查 app.py 是否存在
+    if [ ! -f "$APP_FILE" ]; then
+        echo "请先把 app.py 放到 $PANEL_DIR"
+        exit 1
+    fi
+
     sudo bash -c "cat > $SERVICE_FILE" <<EOL
 [Unit]
-Description=SSH Web 面板
+Description=SSH WebSocket 面板
 After=network.target
 
 [Service]
@@ -118,7 +126,7 @@ User=root
 WorkingDirectory=$PANEL_DIR
 Environment=PANEL_PORT=$PANEL_PORT
 Environment=LOG_FILE=$LOG_FILE
-ExecStart=/usr/bin/python3 $PANEL_DIR/app.py
+ExecStart=/usr/bin/python3 $APP_FILE
 Restart=always
 
 [Install]
