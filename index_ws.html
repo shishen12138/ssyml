@@ -12,20 +12,32 @@
     </style>
 </head>
 <body>
-<h1>SSH WebSocket 面板</h1>
+<div class="container">
+    <h1>SSH WebSocket 面板</h1>
+    <div class="mb-3">
+        <button class="btn btn-primary" onclick="execCmd()">执行命令</button>
+        <button class="btn btn-secondary" onclick="setIntervalSeconds()">设置刷新间隔</button>
+        <button class="btn btn-info" onclick="tailLog()">实时日志</button>
+    </div>
 
-<div id="hosts"></div>
+    <div id="hosts"></div>
+
+    <h3>日志</h3>
+    <pre id="log" style="height:300px; overflow:auto; border:1px solid #ccc; padding:5px;"></pre>
+</div>
 
 <script>
 var socket = io();
 
+// 保存 chart 对象
+var netCharts = {};
+
+// 连接成功
 socket.on('connect', function() {
     console.log('连接成功');
 });
 
-// 保存 chart 对象
-var netCharts = {};
-
+// 接收实时状态
 socket.on('status', function(data) {
     var container = document.getElementById('hosts');
     container.innerHTML = ''; // 每次清空重绘
@@ -98,21 +110,36 @@ socket.on('status', function(data) {
     }
 });
 
-// 命令执行
+// 接收命令执行结果
 socket.on('cmd_result', function(data){
     alert(JSON.stringify(data, null, 4));
 });
 
-// 日志显示
+// 接收日志
 socket.on('log', function(data){
-    console.log(data.msg);
+    var pre = document.getElementById('log');
+    pre.textContent += data.msg + "\n";
+    pre.scrollTop = pre.scrollHeight; // 自动滚动到底部
 });
 
 // 执行命令
 function execCmd(){
     var cmd = prompt("输入命令");
+    if(!cmd) return;
     var ips = prompt("输入IP列表, 用逗号分隔").split(',');
     socket.emit('exec_command', {cmd: cmd, ips: ips});
+}
+
+// 设置刷新间隔
+function setIntervalSeconds(){
+    var sec = prompt("输入刷新间隔（秒）");
+    if(!sec) return;
+    socket.emit('set_interval', {interval: sec});
+}
+
+// 实时日志
+function tailLog(){
+    socket.emit('tail_log');
 }
 </script>
 </body>
