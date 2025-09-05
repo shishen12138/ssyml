@@ -12,7 +12,7 @@ socketio = SocketIO(app, async_mode='eventlet')
 HOSTS_FILE = '/root/ssh_panel/hosts.json'
 LOG_FILE = '/root/ssh_panel/ssh_web_panel.log'
 
-REFRESH_INTERVAL_DEFAULT = 5
+REFRESH_INTERVAL = 5
 MAX_CONCURRENT_SSH = 5
 BATCH_DELAY = 1
 status_loop_started = False
@@ -30,7 +30,7 @@ def save_hosts(hosts):
     with open(HOSTS_FILE,'w') as f:
         json.dump(hosts,f,indent=4)
 
-# -------------------- SSH 监控 --------------------
+# -------------------- SSH 状态 --------------------
 async def async_ssh_status(host):
     result = {}
     try:
@@ -77,10 +77,10 @@ def start_status_loop():
                 all_data = {h['ip']: r for h,r in zip(hosts, results)}
                 socketio.emit('status', all_data)
             eventlet.spawn(asyncio.run, get_status_batch())
-            eventlet.sleep(REFRESH_INTERVAL_DEFAULT)
+            eventlet.sleep(REFRESH_INTERVAL)
     eventlet.spawn(loop)
 
-# -------------------- Web SSH 批量顺序执行 --------------------
+# -------------------- 执行命令 --------------------
 async def run_command_pty(host, cmd, sid):
     try:
         async with asyncssh.connect(host['ip'], port=host.get('port',22),
@@ -105,8 +105,8 @@ async def run_command_pty(host, cmd, sid):
 def handle_exec_command(data):
     cmd = data.get('cmd')
     ips = data.get('ips', [])
-    hosts = load_hosts()
-    selected_hosts = [h for h in hosts if h['ip'] in ips]
+    hosts_all = load_hosts()
+    selected_hosts = [h for h in hosts_all if h['ip'] in ips]
 
     async def exec_seq():
         for h in selected_hosts:
@@ -114,13 +114,6 @@ def handle_exec_command(data):
             eventlet.sleep(BATCH_DELAY)
 
     eventlet.spawn(asyncio.run, exec_seq())
-
-@socketio.on('set_batch_delay')
-def handle_set_batch_delay(data):
-    global BATCH_DELAY
-    delay = float(data.get('delay', BATCH_DELAY))
-    BATCH_DELAY = max(0, delay)
-    emit('log', {'msg':f'批量执行延迟已设置为 {BATCH_DELAY} 秒'})
 
 # -------------------- WebSocket --------------------
 @socketio.on('connect')
@@ -151,12 +144,10 @@ def handle_tail_log():
 
 @socketio.on('set_interval')
 def handle_set_interval(data):
-    global REFRESH_INTERVAL_DEFAULT, MAX_CONCURRENT_SSH
-    interval = int(data.get('interval', REFRESH_INTERVAL_DEFAULT))
-    batch = int(data.get('batch', MAX_CONCURRENT_SSH))
-    REFRESH_INTERVAL_DEFAULT = max(1, interval)
-    MAX_CONCURRENT_SSH = max(1, batch)
-    emit('log', {'msg':f'刷新间隔 {REFRESH_INTERVAL_DEFAULT} 秒, 批量并发 {MAX_CONCURRENT_SSH}'})
+    global REFRESH_INTERVAL
+    interval = int(data.get('interval', REFRESH_INTERVAL))
+    REFRESH_INTERVAL = max(1, interval)
+    emit('log', {'msg':f'刷新间隔已设置为 {REFRESH_INTERVAL} 秒'})
 
 # -------------------- AWS 导入 --------------------
 ALL_REGIONS = ['us-east-1','us-east-2','us-west-1','us-west-2',
@@ -233,7 +224,7 @@ def log_view():
 # -------------------- 页面 --------------------
 @app.route('/')
 def index():
-    return render_template('index_aws.html')
+    return render_template('index_ws.html')  # 前端文件名 index.html
 
 # -------------------- 启动 --------------------
 if __name__ == '__main__':
