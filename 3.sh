@@ -39,3 +39,8 @@ echo "操作完成 ✅"
 echo "可以用以下命令查看状态和日志："
 echo "  systemctl status $SERVICE_NAME"
 echo "  tail -f $LOG_FILE"
+
+
+# 安全重启系统
+echo "即将重启系统..."
+sudo reboot
