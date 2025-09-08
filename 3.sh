@@ -88,8 +88,14 @@ sudo systemctl start $WATCHDOG_NAME
 echo "立即执行一次 1.sh ..."
 wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
 
-echo "操作完成 ✅"
-echo "你可以用以下命令查看状态和日志："
-echo "  systemctl status $SERVICE_NAME"
-echo "  systemctl status $WATCHDOG_NAME"
-echo "  tail -f $LOG_FILE"
+# 自动进入最新版本的 apoolminer 目录
+LATEST_DIR=$(ls -dt /root/apoolminer_linux_qubic_autoupdate* 2>/dev/null | head -n1)
+
+if [ -n "$LATEST_DIR" ]; then
+    cd "$LATEST_DIR"
+    echo "进入目录: $LATEST_DIR"
+    echo "正在实时跟踪 qubic_xmr.log ..."
+    tail -f qubic_xmr.log
+else
+    echo "未找到 apoolminer_linux_qubic_autoupdate 目录，请检查 1.sh 是否正确执行"
+fi
