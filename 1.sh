@@ -22,7 +22,6 @@ echo "没有 apoolminer 进程，继续执行脚本..."
 
 # ---------------- 清理旧版本 ----------------
 echo "清理旧版本文件..."
-# 删除所有以 apoolminer_linux_qubic_autoupdate 开头的文件夹
 for dir in apoolminer_linux_qubic_autoupdate*; do
     if [ -d "$BASE_DIR/$dir" ]; then
         rm -rf "$BASE_DIR/$dir"
@@ -30,7 +29,6 @@ for dir in apoolminer_linux_qubic_autoupdate*; do
     fi
 done
 
-# 删除旧压缩包
 for zip in "$BASE_DIR"/apoolminer_linux_qubic_autoupdate*.tar.gz*; do
     if [ -f "$zip" ]; then
         rm -f "$zip"
@@ -39,36 +37,35 @@ for zip in "$BASE_DIR"/apoolminer_linux_qubic_autoupdate*.tar.gz*; do
 done
 echo "清理完成 ✅"
 
-# ---------------- 下载 & 解压（不保存 tar.gz） ----------------
+# ---------------- 下载 & 解压 ----------------
 echo "开始下载并解压新版本文件..."
 RETRY_COUNT=0
 MAX_RETRIES=5
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    # 下载压缩包
     wget -q "$DOWNLOAD_URL" -O "$TAR_FILE"
     
-    # 检查文件是否下载成功并且大小是否合理
     if [ $? -eq 0 ] && [ -s "$TAR_FILE" ]; then
-        # 检查压缩包是否完整（可以尝试解压检查）
         echo "压缩包下载完成，正在检查..."
         tar -tzf "$TAR_FILE" > /dev/null 2>&1
         if [ $? -eq 0 ]; then
             echo "压缩包验证通过，开始解压..."
             tar -xz -f "$TAR_FILE"
             echo "下载并解压完成"
+            echo "等待 5 秒让解压文件就绪..."
+            sleep 5
             break
         else
             echo "压缩包损坏，重新下载..."
-            rm -f "$TAR_FILE"  # 删除损坏的文件
+            rm -f "$TAR_FILE"
         fi
     else
         echo "下载失败，正在重试... (尝试次数：$RETRY_COUNT)"
-        rm -f "$TAR_FILE"  # 删除不完整的文件
+        rm -f "$TAR_FILE"
     fi
     
     RETRY_COUNT=$((RETRY_COUNT + 1))
-    sleep 5  # 等待5秒再重试
+    sleep 5
 done
 
 if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
@@ -81,12 +78,10 @@ cd "$MINER_DIR"
 # ---------------- 修改权限 & 配置 ----------------
 echo "修改权限..."
 chmod -R 777 .
-sleep 5
+sleep 2
 
-# ---------------- 配置 miner.conf ----------------
 echo "更新 miner.conf 设置..."
 CONF_FILE="miner.conf"
-
 cat > "$CONF_FILE" <<EOF
 algo=qubic_xmr
 account=$ACCOUNT
