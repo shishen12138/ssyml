@@ -86,7 +86,7 @@ sudo systemctl start $SERVICE_NAME
 sudo systemctl start $WATCHDOG_NAME
 
 echo "立即执行一次 1.sh ..."
-wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1
+wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
 
 echo "操作完成 ✅"
 echo "你可以用以下命令查看状态和日志："
