@@ -11,7 +11,7 @@ WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 
-echo "正在创建 miner 服务..."
+echo "正在创建 miner.service ..."
 
 # 创建 miner.service
 sudo bash -c "cat > $SERVICE_PATH <<EOF
@@ -30,25 +30,25 @@ WorkingDirectory=$WORKDIR
 WantedBy=multi-user.target
 EOF"
 
-echo "正在创建 CPU Watchdog 脚本..."
+echo "正在创建 CPU Watchdog 脚本 ..."
 # 创建 watchdog 脚本
 sudo bash -c "cat > $WATCHDOG_SCRIPT <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/miner.log"
+SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
 
-echo \"\$(date) watchdog 启动\" >> \$LOG_FILE
+echo "\$(date) watchdog 启动" >> \$LOG_FILE
 
 while true; do
     # 获取 CPU 空闲率
-    IDLE=\$(top -bn2 -d 1 | grep \"Cpu(s)\" | tail -n1 | awk '{print \$8}' | cut -d. -f1)
+    IDLE=\$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print \$8}' | cut -d. -f1)
     USAGE=\$((100 - IDLE))
 
-    echo \"\$(date) CPU 使用率: \$USAGE%\" >> \$LOG_FILE
+    echo "\$(date) CPU 使用率: \$USAGE%" >> \$LOG_FILE
 
-    if [ \"\$USAGE\" -lt 50 ]; then
-        echo \"\$(date) CPU < 50%，即将重启系统...\" >> \$LOG_FILE
-        sleep 5
-        reboot
+    if [ "\$USAGE" -lt 50 ]; then
+        echo "\$(date) CPU < 50%，重新执行 1.sh ..." >> \$LOG_FILE
+        wget -q \$SCRIPT_URL -O - | bash >> \$LOG_FILE 2>&1
     fi
 
     sleep 30
@@ -57,11 +57,11 @@ EOF"
 
 sudo chmod +x $WATCHDOG_SCRIPT
 
-echo "正在创建 cpu-watchdog.service..."
+echo "正在创建 cpu-watchdog.service ..."
 # 创建 watchdog service
 sudo bash -c "cat > $WATCHDOG_PATH <<EOF
 [Unit]
-Description=CPU watchdog (reboot if usage < 50%)
+Description=CPU watchdog (rerun 1.sh if CPU usage < 50%)
 After=network.target
 
 [Service]
@@ -74,14 +74,14 @@ WorkingDirectory=$WORKDIR
 WantedBy=multi-user.target
 EOF"
 
-echo "重新加载 systemd 配置..."
+echo "重新加载 systemd 配置 ..."
 sudo systemctl daemon-reload
 
-echo "启用开机自启..."
+echo "启用开机自启 ..."
 sudo systemctl enable $SERVICE_NAME
 sudo systemctl enable $WATCHDOG_NAME
 
-echo "立即启动服务..."
+echo "立即启动服务 ..."
 sudo systemctl start $SERVICE_NAME
 sudo systemctl start $WATCHDOG_NAME
 
@@ -90,7 +90,3 @@ echo "你可以用以下命令查看状态和日志："
 echo "  systemctl status $SERVICE_NAME"
 echo "  systemctl status $WATCHDOG_NAME"
 echo "  tail -f $LOG_FILE"
-
-# 安全重启系统
-echo "即将重启系统..."
-sudo reboot
