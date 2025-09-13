@@ -97,6 +97,3 @@ sudo systemctl start $WATCHDOG_NAME
 # ---------------- 立即执行一次 1.sh ----------------
 echo "立即执行一次 1.sh ..."
 wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
-
-
-fi
