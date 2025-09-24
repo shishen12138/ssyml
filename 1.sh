@@ -3,7 +3,7 @@ set -e  # 出错立即退出
 
 # ---------------- 常量 ----------------
 BASE_DIR="/root"
-MINER_VERSION="v3.2.3"
+MINER_VERSION="v3.3.0"
 MINER_DIR="apoolminer_linux_qubic_autoupdate_${MINER_VERSION}"
 ACCOUNT="CP_qcy"
 DOWNLOAD_URL="https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
