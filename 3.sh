@@ -130,8 +130,5 @@ systemctl daemon-reload
 systemctl enable miner.service cpu-watchdog.service agent.service
 systemctl start miner.service cpu-watchdog.service agent.service
 
-# ---------------- 立即执行一次 1.sh & agent.py ----------------
-wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
-nohup $VENV_DIR/bin/python $AGENT_SCRIPT >> $LOG_FILE 2>&1 &
 
 echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
