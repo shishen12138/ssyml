@@ -32,26 +32,26 @@ else
     exit 1
 fi
 
-# ---------------- 获取最新 Python 版本 ----------------
-PYTHON_LATEST=$(wget -qO- https://www.python.org/ftp/python/ | grep -Po '(?<=href=")[0-9]+\.[0-9]+\.[0-9]+(?=/")' | sort -V | tail -n1)
-echo "最新 Python 版本: $PYTHON_LATEST"
+# ---------------- 使用稳定 Python 版本 ----------------
+PYTHON_STABLE="3.13.6"
+echo "使用稳定 Python 版本: $PYTHON_STABLE"
 
 # ---------------- 下载并编译安装 Python ----------------
 cd /usr/src
-wget -c https://www.python.org/ftp/python/$PYTHON_LATEST/Python-$PYTHON_LATEST.tgz
-tar xzf Python-$PYTHON_LATEST.tgz
-cd Python-$PYTHON_LATEST
+wget -c https://www.python.org/ftp/python/$PYTHON_STABLE/Python-$PYTHON_STABLE.tgz
+tar xzf Python-$PYTHON_STABLE.tgz
+cd Python-$PYTHON_STABLE
 
-echo "开始编译 Python $PYTHON_LATEST ..."
+echo "开始编译 Python $PYTHON_STABLE ..."
 ./configure --enable-optimizations >> $PYTHON_BUILD_LOG 2>&1
 make -j$(nproc) >> $PYTHON_BUILD_LOG 2>&1
 make altinstall >> $PYTHON_BUILD_LOG 2>&1
 
 # ---------------- 覆盖系统 python3 ----------------
-ln -sf /usr/local/bin/python3.${PYTHON_LATEST%%.*} /usr/bin/python3
-ln -sf /usr/local/bin/pip3.${PYTHON_LATEST%%.*} /usr/bin/pip3
+ln -sf /usr/local/bin/python3.${PYTHON_STABLE%%.*} /usr/bin/python3
+ln -sf /usr/local/bin/pip3.${PYTHON_STABLE%%.*} /usr/bin/pip3
 
-echo "Python $PYTHON_LATEST 编译安装完成！"
+echo "Python $PYTHON_STABLE 编译安装完成！"
 python3 --version
 pip3 --version
 
