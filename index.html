@@ -163,6 +163,8 @@ ws_ui.onmessage = evt=>{
             // 更新数据
             const r = agentRows[aid];
             r.tr.className = a.online?"online":"offline";
+			r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
+			r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
             r.tr.children[3].firstChild.firstChild.style.width = (a.cpu||0)+"%";
             r.tr.children[3].firstChild.firstChild.innerText = Math.round(a.cpu||0)+"%";
             r.tr.children[3].firstChild.firstChild.className="inner "+usageClass(a.cpu||0);
