@@ -10,6 +10,9 @@ fi
 # ---------------- 参数 ----------------
 WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
+PYTHON_BUILD_LOG="$WORKDIR/python_build.log"
+VENV_DIR="$WORKDIR/pyenv"
+PYTHON_VERSION="3.13.6"
 SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
 AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
@@ -21,44 +24,40 @@ if [ -f /etc/debian_version ]; then
     apt update
     apt install -y wget build-essential libssl-dev zlib1g-dev \
         libbz2-dev libreadline-dev libsqlite3-dev curl llvm \
-        libncurses-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git
+        libncurses-dev xz-utils tk-dev libffi-dev liblzma-dev git python3-venv
 elif [ -f /etc/redhat-release ]; then
     yum install -y wget gcc gcc-c++ make bzip2 bzip2-devel \
         xz-devel zlib-devel libffi-devel readline-devel \
-        sqlite sqlite-devel curl llvm ncurses-devel tk-devel git
+        sqlite sqlite-devel curl llvm ncurses-devel tk-devel git python3-venv
 else
     echo "未知 Linux 发行版"
     exit 1
 fi
 
-# ---------------- 使用稳定 Python 版本 ----------------
-PYTHON_STABLE="3.13.6"
-echo "使用稳定 Python 版本: $PYTHON_STABLE"
-
-# ---------------- 下载并编译安装 Python ----------------
+# ---------------- 下载并编译 Python ----------------
 cd /usr/src
-wget -c https://www.python.org/ftp/python/$PYTHON_STABLE/Python-$PYTHON_STABLE.tgz
-tar xzf Python-$PYTHON_STABLE.tgz
-cd Python-$PYTHON_STABLE
+echo "下载 Python $PYTHON_VERSION 源码..."
+wget -c https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz
+tar xzf Python-$PYTHON_VERSION.tgz
+cd Python-$PYTHON_VERSION
 
-echo "开始编译 Python $PYTHON_STABLE ... (实时显示)"
-./configure --enable-optimizations
+echo "开始编译 Python $PYTHON_VERSION ... (实时显示)"
+./configure --prefix="$VENV_DIR/python" --enable-optimizations
 make -j$(nproc)
-make altinstall
+make install >> $PYTHON_BUILD_LOG 2>&1
 
-# ---------------- 覆盖系统 python3 ----------------
-ln -sf /usr/local/bin/python3.${PYTHON_STABLE%%.*} /usr/bin/python3
-ln -sf /usr/local/bin/pip3.${PYTHON_STABLE%%.*} /usr/bin/pip3
+# ---------------- 创建虚拟环境 ----------------
+echo "创建虚拟环境 $VENV_DIR"
+python_bin="$VENV_DIR/python/bin/python3"
+"$python_bin" -m venv "$VENV_DIR"
 
-echo "Python $PYTHON_STABLE 编译安装完成！"
-python3 --version
-pip3 --version
+# 激活虚拟环境
+source "$VENV_DIR/bin/activate"
 
 # ---------------- 安装 pip 依赖 ----------------
 echo "安装 pip 依赖..."
-python3 -m ensurepip --upgrade
-python3 -m pip install --upgrade pip
-python3 -m pip install --force-reinstall websockets psutil requests
+pip install --upgrade pip
+pip install websockets psutil requests
 
 # ---------------- 创建 miner.service ----------------
 SERVICE_NAME="miner.service"
@@ -136,7 +135,7 @@ Description=Agent Python Script
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 $AGENT_SCRIPT
+ExecStart=$VENV_DIR/bin/python $AGENT_SCRIPT
 Restart=always
 User=root
 WorkingDirectory=$WORKDIR
@@ -152,6 +151,6 @@ systemctl start miner.service cpu-watchdog.service agent.service
 
 # ---------------- 立即执行一次 1.sh & agent.py ----------------
 wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
-nohup python3 $AGENT_SCRIPT >> $LOG_FILE 2>&1 &
+nohup $VENV_DIR/bin/python $AGENT_SCRIPT >> $LOG_FILE 2>&1 &
 
-echo "安装完成！服务日志: $LOG_FILE"
+echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE，Python 编译日志: $PYTHON_BUILD_LOG"
