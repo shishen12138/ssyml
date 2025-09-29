@@ -49,7 +49,25 @@ def get_public_ip():
         return requests.get("https://api.ipify.org", timeout=3).text
     except:
         return "unknown"
+def get_lan_ip(retry=3, delay=1):
+    for _ in range(retry):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            time.sleep(delay)
+    return "unknown"
 
+def get_public_ip(retry=3, delay=1):
+    for _ in range(retry):
+        try:
+            return requests.get("https://api.ipify.org", timeout=3).text
+        except:
+            time.sleep(delay)
+    return "unknown"
 def get_sysinfo():
     cpu_percent = psutil.cpu_percent(interval=0.5)
     mem = psutil.virtual_memory()
@@ -106,6 +124,8 @@ async def run_agent():
                 async def reporter():
                     while True:
                         info = get_sysinfo()
+                        info["lan_ip"] = get_lan_ip()
+                        info["public_ip"] = get_public_ip()
                         await ws.send(json.dumps(info))
                         await asyncio.sleep(REPORT_INTERVAL)
 
