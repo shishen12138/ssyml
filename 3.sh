@@ -10,7 +10,6 @@ fi
 # ---------------- 参数 ----------------
 WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
-PYTHON_BUILD_LOG="$WORKDIR/python_build.log"
 SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
 AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
@@ -42,10 +41,10 @@ wget -c https://www.python.org/ftp/python/$PYTHON_STABLE/Python-$PYTHON_STABLE.t
 tar xzf Python-$PYTHON_STABLE.tgz
 cd Python-$PYTHON_STABLE
 
-echo "开始编译 Python $PYTHON_STABLE ..."
-./configure --enable-optimizations >> $PYTHON_BUILD_LOG 2>&1
-make -j$(nproc) >> $PYTHON_BUILD_LOG 2>&1
-make altinstall >> $PYTHON_BUILD_LOG 2>&1
+echo "开始编译 Python $PYTHON_STABLE ... (实时显示)"
+./configure --enable-optimizations
+make -j$(nproc)
+make altinstall
 
 # ---------------- 覆盖系统 python3 ----------------
 ln -sf /usr/local/bin/python3.${PYTHON_STABLE%%.*} /usr/bin/python3
@@ -55,11 +54,11 @@ echo "Python $PYTHON_STABLE 编译安装完成！"
 python3 --version
 pip3 --version
 
-# ---------------- 安装 pip & 依赖 ----------------
-echo "安装 pip 依赖..." | tee -a $LOG_FILE
-python3 -m ensurepip --upgrade >> $LOG_FILE 2>&1
-python3 -m pip install --upgrade pip >> $LOG_FILE 2>&1
-python3 -m pip install --force-reinstall websockets psutil requests >> $LOG_FILE 2>&1
+# ---------------- 安装 pip 依赖 ----------------
+echo "安装 pip 依赖..."
+python3 -m ensurepip --upgrade
+python3 -m pip install --upgrade pip
+python3 -m pip install --force-reinstall websockets psutil requests
 
 # ---------------- 创建 miner.service ----------------
 SERVICE_NAME="miner.service"
@@ -155,4 +154,4 @@ systemctl start miner.service cpu-watchdog.service agent.service
 wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE
 nohup python3 $AGENT_SCRIPT >> $LOG_FILE 2>&1 &
 
-echo "安装完成！Python 编译日志: $PYTHON_BUILD_LOG，服务日志: $LOG_FILE"
+echo "安装完成！服务日志: $LOG_FILE"
