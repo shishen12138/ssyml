@@ -11,8 +11,8 @@ h2{margin-bottom:20px; text-align:center; color:#333;}
 table{width:100%;border-collapse:collapse; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.05); border-radius:8px; overflow:hidden;}
 th,td{border:1px solid #e6e6e6;padding:8px;vertical-align:middle; text-align:center;}
 thead th{background:#fafafa; font-weight:600;}
-tr.online { background: linear-gradient(90deg,#d4fdd0,#b8f4b0); }   /* 在线渐变绿 */
-tr.offline { background: linear-gradient(90deg,#ffdada,#ffbaba); }  /* 离线渐变红 */
+tr.online { background: linear-gradient(90deg,#d4fdd0,#b8f4b0); }
+tr.offline { background: linear-gradient(90deg,#ffdada,#ffbaba); }
 .expand{display:none; background:#f9f9f9;}
 .cmdbox{display:flex; flex-direction:column; gap:4px; margin-top:6px;}
 .cmdbox input{width:100%; padding:6px; border-radius:6px; border:1px solid #ccc; box-sizing:border-box;}
@@ -121,7 +121,10 @@ ws_ui.onmessage = evt=>{
                 <td>0/0</td>
                 <td>0秒</td>
                 <td>${a.online?"在线":"离线"}</td>
-                <td><button onclick="toggleExpand('${uid}')">展开</button></td>`;
+                <td>
+                    <button onclick="toggleExpand('${uid}')">展开</button>
+                    <button onclick="deleteAgent('${aid}')">删除</button>
+                </td>`;
 
                 tbody.appendChild(tr);
 
@@ -199,6 +202,20 @@ ws_ui.onmessage = evt=>{
         }
     }
 };
+
+// ---------------- 新增删除函数 ----------------
+function deleteAgent(aid){
+    if(!confirm("确定要删除 agent "+aid+" 吗？")) return;
+    ws_ui.send(JSON.stringify({type:"remove", agent_id:aid, auth:AUTH}));
+    const r = agentRows[aid];
+    if(r){
+        r.tr.remove();
+        r.exp.remove();
+        delete agentRows[aid];
+        delete agents[aid];
+    }
+    document.getElementById("total").innerText = Object.keys(agents).length;
+}
 
 function toggleExpand(id){
     const tr=document.getElementById(id);
