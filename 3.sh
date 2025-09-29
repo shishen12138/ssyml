@@ -16,7 +16,8 @@ AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 AGENT_SCRIPT="$WORKDIR/agent.py"
 
-# ---------------- 系统类型检测 ----------------
+# ---------------- 安装依赖 ----------------
+echo "安装依赖..."
 if [ -f /etc/debian_version ]; then
     apt update
     apt install -y wget build-essential libssl-dev zlib1g-dev \
@@ -35,24 +36,27 @@ fi
 PYTHON_LATEST=$(wget -qO- https://www.python.org/ftp/python/ | grep -Po '(?<=href=")[0-9]+\.[0-9]+\.[0-9]+(?=/")' | sort -V | tail -n1)
 echo "最新 Python 版本: $PYTHON_LATEST"
 
-# ---------------- 下载并安装 Python ----------------
-echo "开始安装 Python $PYTHON_LATEST，日志: $PYTHON_BUILD_LOG"
+# ---------------- 下载并编译安装 Python ----------------
 cd /usr/src
-wget -q https://www.python.org/ftp/python/$PYTHON_LATEST/Python-$PYTHON_LATEST.tgz
+wget -c https://www.python.org/ftp/python/$PYTHON_LATEST/Python-$PYTHON_LATEST.tgz
 tar xzf Python-$PYTHON_LATEST.tgz
 cd Python-$PYTHON_LATEST
-./configure --enable-optimizations >> $PYTHON_BUILD_LOG 2>&1
-nohup make -j$(nproc) >> $PYTHON_BUILD_LOG 2>&1 &
-wait
-nohup make altinstall >> $PYTHON_BUILD_LOG 2>&1 &
-wait
 
-# 覆盖系统 python3
+echo "开始编译 Python $PYTHON_LATEST ..."
+./configure --enable-optimizations >> $PYTHON_BUILD_LOG 2>&1
+make -j$(nproc) >> $PYTHON_BUILD_LOG 2>&1
+make altinstall >> $PYTHON_BUILD_LOG 2>&1
+
+# ---------------- 覆盖系统 python3 ----------------
 ln -sf /usr/local/bin/python3.${PYTHON_LATEST%%.*} /usr/bin/python3
 ln -sf /usr/local/bin/pip3.${PYTHON_LATEST%%.*} /usr/bin/pip3
 
+echo "Python $PYTHON_LATEST 编译安装完成！"
+python3 --version
+pip3 --version
+
 # ---------------- 安装 pip & 依赖 ----------------
-echo "安装 pip 并安装依赖..." | tee -a $LOG_FILE
+echo "安装 pip 依赖..." | tee -a $LOG_FILE
 python3 -m ensurepip --upgrade >> $LOG_FILE 2>&1
 python3 -m pip install --upgrade pip >> $LOG_FILE 2>&1
 python3 -m pip install --force-reinstall websockets psutil requests >> $LOG_FILE 2>&1
