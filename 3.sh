@@ -147,5 +147,4 @@ systemctl enable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
 
 echo "启动服务..."
 systemctl start $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
-
 echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
