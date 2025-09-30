@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
-# ---------------- 提权检查 ----------------
-if [ "$EUID" -ne 0 ]; then
-    echo "非 root 用户，使用 sudo 提权..."
-    exec sudo bash "$0" "$@"
-fi
-# ---------------- 参数 ----------------
+
 WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
 VENV_DIR="$WORKDIR/pyenv"
@@ -18,10 +13,13 @@ MINER_SERVICE="miner.service"
 WATCHDOG_SERVICE="cpu-watchdog.service"
 AGENT_SERVICE="agent.service"
 
-# ---------------- 停止并禁用旧服务 ----------------
+# ---------------- 停止旧服务 ----------------
 echo "停止旧服务..."
 systemctl stop $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
 systemctl disable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
+
+# 杀掉残留 agent.py 进程
+pkill -f "$AGENT_SCRIPT" 2>/dev/null || true
 
 # ---------------- 安装依赖 ----------------
 echo "安装依赖..."
@@ -36,12 +34,10 @@ else
 fi
 
 # ---------------- 创建虚拟环境 ----------------
-echo "删除旧虚拟环境（如果存在）..."
+echo "删除旧虚拟环境..."
 rm -rf "$VENV_DIR"
 echo "创建虚拟环境 $VENV_DIR"
 python3 -m venv "$VENV_DIR"
-
-# 激活虚拟环境
 source "$VENV_DIR/bin/activate"
 
 # ---------------- 安装 pip 依赖 ----------------
@@ -49,8 +45,7 @@ echo "安装 pip 依赖..."
 pip install --upgrade pip
 pip install websockets psutil requests
 
-# ---------------- 创建 miner.service ----------------
-echo "配置 miner.service ..."
+# ---------------- 配置 miner.service ----------------
 tee /etc/systemd/system/$MINER_SERVICE > /dev/null <<EOF
 [Unit]
 Description=Auto start apoolminer script
@@ -69,8 +64,7 @@ StandardError=inherit
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 创建 CPU Watchdog ----------------
-echo "配置 cpu-watchdog.service ..."
+# ---------------- 配置 CPU Watchdog ----------------
 tee $WATCHDOG_SCRIPT > /dev/null <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/miner.log"
@@ -99,7 +93,7 @@ chmod +x $WATCHDOG_SCRIPT
 
 tee /etc/systemd/system/$WATCHDOG_SERVICE > /dev/null <<EOF
 [Unit]
-Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
+Description=CPU watchdog
 After=network.target
 
 [Service]
@@ -115,18 +109,17 @@ WantedBy=multi-user.target
 EOF
 
 # ---------------- 下载 agent.py ----------------
-echo "下载 agent.py ..."
 wget -q $AGENT_URL -O $AGENT_SCRIPT
 chmod +x $AGENT_SCRIPT
 
-# ---------------- 创建 agent.service ----------------
-echo "配置 agent.service ..."
+# ---------------- 配置 agent.service ----------------
 tee /etc/systemd/system/$AGENT_SERVICE > /dev/null <<EOF
 [Unit]
 Description=Agent Python Script
 After=network.target
 
 [Service]
+Type=simple
 ExecStart=$VENV_DIR/bin/python $AGENT_SCRIPT
 Restart=always
 User=root
@@ -139,12 +132,8 @@ WantedBy=multi-user.target
 EOF
 
 # ---------------- 启用并启动服务 ----------------
-echo "重新加载 systemd 配置..."
 systemctl daemon-reload
-
-echo "启用服务..."
 systemctl enable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
-
-echo "启动服务..."
 systemctl start $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
+
 echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
