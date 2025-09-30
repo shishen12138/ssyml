@@ -50,10 +50,12 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash >> $LOG_FILE 2>&1'
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE'
 RemainAfterExit=true
 User=root
 WorkingDirectory=$WORKDIR
+StandardOutput=inherit
+StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
@@ -68,16 +70,16 @@ LOG_FILE="/root/miner.log"
 THRESHOLD=50
 MAX_LOW=3
 LOW_COUNT=0
-echo "$(date) watchdog 启动" >> $LOG_FILE
+echo "$(date) watchdog 启动" | tee -a $LOG_FILE
 while true; do
     IDLE=$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print $8}' | cut -d. -f1)
     USAGE=$((100 - IDLE))
-    echo "$(date) CPU 使用率: $USAGE%" >> $LOG_FILE
+    echo "$(date) CPU 使用率: $USAGE%" | tee -a $LOG_FILE
     if [ "$USAGE" -lt "$THRESHOLD" ]; then
         LOW_COUNT=$((LOW_COUNT+1))
-        echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" >> $LOG_FILE
+        echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" | tee -a $LOG_FILE
         if [ "$LOW_COUNT" -ge "$MAX_LOW" ]; then
-            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启服务器..." >> $LOG_FILE
+            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启服务器..." | tee -a $LOG_FILE
             reboot
         fi
     else
@@ -98,6 +100,8 @@ ExecStart=/bin/bash $WATCHDOG_SCRIPT
 Restart=always
 User=root
 WorkingDirectory=$WORKDIR
+StandardOutput=inherit
+StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
@@ -120,6 +124,8 @@ ExecStart=$VENV_DIR/bin/python $AGENT_SCRIPT
 Restart=always
 User=root
 WorkingDirectory=$WORKDIR
+StandardOutput=inherit
+StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
@@ -129,6 +135,5 @@ EOF
 systemctl daemon-reload
 systemctl enable miner.service cpu-watchdog.service agent.service
 systemctl start miner.service cpu-watchdog.service agent.service
-
 
 echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
