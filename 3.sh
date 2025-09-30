@@ -1,13 +1,6 @@
 #!/bin/bash
 set -e
 
-# ---------------- 提权检查 ----------------
-if [ "$EUID" -ne 0 ]; then
-    echo "非 root 用户，使用 sudo 提权..."
-    exec sudo bash "$0" "$@"
-fi
-
-# ---------------- 参数 ----------------
 WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
 VENV_DIR="$WORKDIR/pyenv"
@@ -16,41 +9,39 @@ AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 AGENT_SCRIPT="$WORKDIR/agent.py"
 
-# ---------------- 安装依赖 ----------------
-echo "安装依赖..."
+echo "----------------- 安装依赖 -----------------"
 if [ -f /etc/debian_version ]; then
-    apt update
-    apt install -y wget build-essential git python3-venv python3-pip
+    apt update | tee -a $LOG_FILE
+    apt install -y wget build-essential git python3-venv python3-pip | tee -a $LOG_FILE
 elif [ -f /etc/redhat-release ]; then
-    yum install -y wget gcc gcc-c++ make git python3-venv python3-pip
+    yum install -y wget gcc gcc-c++ make git python3-venv python3-pip | tee -a $LOG_FILE
 else
-    echo "未知 Linux 发行版"
+    echo "未知 Linux 发行版" | tee -a $LOG_FILE
     exit 1
 fi
 
-# ---------------- 创建虚拟环境 ----------------
-echo "创建虚拟环境 $VENV_DIR"
-python3 -m venv "$VENV_DIR"
-
-# 激活虚拟环境
+echo "----------------- 创建虚拟环境 -----------------"
+python3 -m venv "$VENV_DIR" | tee -a $LOG_FILE
 source "$VENV_DIR/bin/activate"
 
-# ---------------- 安装 pip 依赖 ----------------
-echo "安装 pip 依赖..."
-pip install --upgrade pip
-pip install websockets psutil requests
+echo "----------------- 安装 pip 依赖 -----------------"
+pip install --upgrade pip | tee -a $LOG_FILE
+pip install websockets psutil requests | tee -a $LOG_FILE
 
-# ---------------- 创建 miner.service ----------------
-SERVICE_NAME="miner.service"
-SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
-tee $SERVICE_PATH > /dev/null <<EOF
+echo "----------------- 下载 agent.py -----------------"
+wget $AGENT_URL -O $AGENT_SCRIPT | tee -a $LOG_FILE
+chmod +x $AGENT_SCRIPT
+
+echo "----------------- 配置 systemd 服务 -----------------"
+# miner.service
+tee /etc/systemd/system/miner.service > /dev/null <<EOF
 [Unit]
 Description=Auto start apoolminer script
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE'
+ExecStart=/bin/bash -c 'wget -O - $SCRIPT_URL | bash 2>&1 | tee -a $LOG_FILE'
 RemainAfterExit=true
 User=root
 WorkingDirectory=$WORKDIR
@@ -61,9 +52,7 @@ StandardError=inherit
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 创建 CPU Watchdog ----------------
-WATCHDOG_NAME="cpu-watchdog.service"
-WATCHDOG_PATH="/etc/systemd/system/$WATCHDOG_NAME"
+# cpu-watchdog.service
 tee $WATCHDOG_SCRIPT > /dev/null <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/miner.log"
@@ -90,9 +79,9 @@ done
 EOF
 chmod +x $WATCHDOG_SCRIPT
 
-tee $WATCHDOG_PATH > /dev/null <<EOF
+tee /etc/systemd/system/cpu-watchdog.service > /dev/null <<EOF
 [Unit]
-Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
+Description=CPU watchdog
 After=network.target
 
 [Service]
@@ -107,14 +96,8 @@ StandardError=inherit
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 下载 agent.py ----------------
-wget -q $AGENT_URL -O $AGENT_SCRIPT
-chmod +x $AGENT_SCRIPT
-
-# ---------------- 创建 agent.service ----------------
-AGENT_SERVICE_NAME="agent.service"
-AGENT_PATH="/etc/systemd/system/$AGENT_SERVICE_NAME"
-tee $AGENT_PATH > /dev/null <<EOF
+# agent.service
+tee /etc/systemd/system/agent.service > /dev/null <<EOF
 [Unit]
 Description=Agent Python Script
 After=network.target
@@ -131,9 +114,10 @@ StandardError=inherit
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 启用并启动服务 ----------------
+echo "----------------- 启动服务 -----------------"
 systemctl daemon-reload
-systemctl enable miner.service cpu-watchdog.service agent.service
-systemctl start miner.service cpu-watchdog.service agent.service
+systemctl enable miner.service cpu-watchdog.service agent.service | tee -a $LOG_FILE
+systemctl start miner.service cpu-watchdog.service agent.service | tee -a $LOG_FILE
 
 echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
+echo "可以用 'journalctl -f -u agent.service' 查看 agent 运行日志"
