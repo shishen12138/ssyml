@@ -29,7 +29,6 @@ else
     exit 1
 fi
 
-
 # ---------------- 创建虚拟环境 ----------------
 echo "创建虚拟环境 $VENV_DIR..."
 if [ -d "$VENV_DIR" ]; then
