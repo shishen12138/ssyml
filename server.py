@@ -17,31 +17,25 @@ UI_WS_PORT = 8000
 AGENT_WS_PORT = 9001
 HTTP_PORT = 8080
 AUTH_TOKEN = "super-secret-token-CHANGE_ME"
-HEARTBEAT_TIMEOUT = 30  # 心跳超时秒数
+HEARTBEAT_TIMEOUT = 30  # 超过30秒没收到update标离线
 
-# ---------------- 日志配置 ----------------
+# ---------------- 日志 ----------------
 if sys.platform.startswith("win"):
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    log_path = desktop
+    log_path = os.path.join(os.path.expanduser("~"), "Desktop")
 else:
     log_path = "/root"
     if not os.access(log_path, os.W_OK):
         log_path = os.path.dirname(os.path.abspath(__file__))
 
 LOG_FILE = os.path.join(log_path, "server.log")
-
-# 日志初始化
 logger = logging.getLogger("ServerLogger")
 logger.setLevel(logging.INFO)
-
 formatter = logging.Formatter("[%(asctime)s] %(message)s", "%Y-%m-%d %H:%M:%S")
 
-# 控制台日志
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-# 文件日志，按天轮转，保留最近7天
 file_handler = TimedRotatingFileHandler(LOG_FILE, when="midnight", interval=1, backupCount=7, encoding="utf-8")
 file_handler.setFormatter(formatter)
 file_handler.suffix = "%Y-%m-%d"
@@ -51,86 +45,58 @@ def log(msg):
     logger.info(msg)
 
 # ---------------- 全局状态 ----------------
-agents = {}      # agent_id -> {ws, last, info, conn_id, remote, replaced, online}
-ws_map = {}      # conn_id -> agent_id
+agents = {}      # agent_id -> {ws, last, info, online}
 ui_clients = set()
-agents_lock = asyncio.Lock()  # 并发保护
+agents_lock = asyncio.Lock()
 
 # ---------------- Agent 处理 ----------------
 async def handle_agent(ws):
-    conn_id = id(ws)
-    remote = getattr(ws, "remote_address", None)
+    aid = None
     try:
         async for msg in ws:
             try:
                 data = json.loads(msg)
-            except Exception:
+            except:
                 continue
 
             if data.get("type") == "register":
                 aid = data.get("agent_id")
-                if not aid:
-                    continue
-
+                if not aid: continue
                 async with agents_lock:
-                    old = agents.get(aid)
-                    if old and old.get("ws") and old["ws"] is not ws:
-                        old["replaced"] = True
-                        try:
-                            await old["ws"].close()
-                        except:
-                            pass
-                        log(f"[!] agent {aid} 新连接 {conn_id} 替换旧连接 {old.get('conn_id')}")
-
                     agents[aid] = {
                         "ws": ws,
                         "last": time.time(),
                         "info": agents.get(aid, {}).get("info", {}),
-                        "conn_id": conn_id,
-                        "remote": remote,
-                        "replaced": False,
-                        "online": True
+                        "online": True,
                     }
-                    ws_map[conn_id] = aid
-                    log(f"[+] agent {aid} 注册 conn={conn_id} remote={remote}")
+                log(f"[+] agent {aid} 注册")
                 await broadcast_summary()
 
-            elif data.get("type") == "update":
-                aid = data.get("agent_id")
+            elif data.get("type") == "update" and aid:
                 async with agents_lock:
-                    if aid in agents and agents[aid].get("conn_id") == conn_id:
-                        agents[aid]["last"] = time.time()
-                        agents[aid]["info"] = data
-                        agents[aid]["online"] = True
+                    agent = agents.get(aid)
+                    if agent:
+                        agent["info"] = data          # 包含实时流量 net.up_speed/down_speed
+                        agent["last"] = time.time()
+                        agent["online"] = True        # 收到上报立即标在线
                 await broadcast_summary()
 
-            elif data.get("type") == "cmd_result":
+            elif data.get("type") == "cmd_result" and aid:
                 await broadcast_ui({
                     "type": "cmd_result",
-                    "agent_id": data.get("agent_id"),
+                    "agent_id": aid,
                     "payload": data.get("payload")
                 })
 
     except websockets.ConnectionClosed:
-        log(f"agent {conn_id} 连接关闭")
-    except Exception as e:
-        log(f"agent error: {e}")
+        pass
     finally:
-        async with agents_lock:
-            aid = ws_map.pop(conn_id, None)
-            if aid:
-                cur = agents.get(aid)
-                if cur and cur.get("conn_id") == conn_id:
-                    if cur.get("replaced"):
-                        log(f"[-] agent {aid} 旧连接断开，被替换，忽略下线")
-                    else:
-                        log(f"[-] agent {aid} 连接断开 conn={conn_id} remote={remote}")
-                        agents[aid].update({
-                            "ws": None,
-                            "conn_id": None,
-                            "remote": None,
-                            "online": False
-                        })
+        if aid:
+            async with agents_lock:
+                agent = agents.get(aid)
+                if agent:
+                    agent["ws"] = None  # 断开连接不直接标离线
+        log(f"[-] agent {aid} 断开")
         await broadcast_summary()
 
 # ---------------- UI 处理 ----------------
@@ -157,8 +123,8 @@ async def handle_ui(ws):
                         if agent and agent.get("ws"):
                             try:
                                 await agent["ws"].send(json.dumps({"type":"exec","cmd":cmd}))
-                            except Exception as e:
-                                log(f"[!] 发命令到 {aid} 失败: {e}")
+                            except:
+                                pass
 
             elif data.get("type") == "remove":
                 if data.get("auth") != AUTH_TOKEN:
@@ -170,8 +136,6 @@ async def handle_ui(ws):
 
     except websockets.ConnectionClosed:
         log("UI 连接关闭")
-    except Exception as e:
-        log(f"ui error: {e}")
     finally:
         ui_clients.discard(ws)
         log("[-] UI 断开")
@@ -179,21 +143,13 @@ async def handle_ui(ws):
 # ---------------- 删除 agent ----------------
 async def remove_agent(agent_id):
     async with agents_lock:
-        agent = agents.get(agent_id)
-        if not agent:
-            log(f"[!] agent {agent_id} 不存在")
-            return
-        ws = agent.get("ws")
-        if ws:
+        agent = agents.pop(agent_id, None)
+        if agent and agent.get("ws"):
             try:
-                await ws.close()
+                await agent["ws"].close()
             except:
                 pass
-        agents.pop(agent_id, None)
-        to_remove = [k for k,v in ws_map.items() if v == agent_id]
-        for k in to_remove:
-            ws_map.pop(k, None)
-        log(f"[!] agent {agent_id} 已删除")
+    log(f"[!] agent {agent_id} 已删除")
     await broadcast_summary()
 
 # ---------------- 广播 ----------------
@@ -204,10 +160,8 @@ async def broadcast_ui(data: dict):
     for u in list(ui_clients):
         try:
             await u.send(msg)
-        except websockets.ConnectionClosed:
+        except:
             ui_clients.discard(u)
-        except Exception as e:
-            log(f"[!] 广播失败: {e}")
 
 async def broadcast_summary():
     async with agents_lock:
@@ -216,11 +170,11 @@ async def broadcast_summary():
         now = time.time()
         agents_list = []
         for aid, v in agents.items():
-            alive = v.get("online") and bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
+            alive = bool(v.get("online") and v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
             if alive: online += 1
             else: offline += 1
             info = v.get("info", {}).copy()
-            info.update({"agent_id": aid, "online": alive, "remote": v.get("remote")})
+            info.update({"agent_id": aid, "online": alive})
             agents_list.append(info)
         payload = {
             "type": "update",
@@ -234,12 +188,12 @@ async def broadcast_summary():
 async def heartbeat_check():
     while True:
         changed = False
+        now = time.time()
         async with agents_lock:
-            now = time.time()
-            for aid, v in agents.items():
-                alive = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
-                if v.get("online") != alive:
-                    v["online"] = alive
+            for v in agents.values():
+                online = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
+                if v.get("online") != online:
+                    v["online"] = online
                     changed = True
         if changed:
             await broadcast_summary()
@@ -257,10 +211,8 @@ def start_http_server():
 
 # ---------------- 主程序 ----------------
 async def main():
-    agent_srv = await websockets.serve(handle_agent, "0.0.0.0", AGENT_WS_PORT,
-                                       ping_interval=20, ping_timeout=20)
-    ui_srv = await websockets.serve(handle_ui, "0.0.0.0", UI_WS_PORT,
-                                    ping_interval=20, ping_timeout=20)
+    await websockets.serve(handle_agent, "0.0.0.0", AGENT_WS_PORT, ping_interval=20, ping_timeout=20)
+    await websockets.serve(handle_ui, "0.0.0.0", UI_WS_PORT, ping_interval=20, ping_timeout=20)
     log(f"[WS] UI端口 {UI_WS_PORT}, agent端口 {AGENT_WS_PORT}")
 
     threading.Thread(target=start_http_server, daemon=True).start()
@@ -276,5 +228,5 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"服务器异常: {e}")
     finally:
-        if sys.platform.startswith("win"):
+        if sys.platform.startswith("win"): 
             input("按回车退出...")
