@@ -5,7 +5,6 @@ if [ "$EUID" -ne 0 ]; then
     echo "非 root 用户，使用 sudo 提权..."
     exec sudo bash "$0" "$@"
 fi
-
 # ---------------- 参数 ----------------
 WORKDIR="/root"
 LOG_FILE="$WORKDIR/miner.log"
