@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import asyncio
 import websockets
 import psutil
@@ -10,6 +11,7 @@ import subprocess
 import uuid
 import requests
 import sys
+import threading
 
 # ---------------- 配置 ----------------
 SERVER = "ws://47.236.6.215:9001"  # 控制端地址
@@ -24,14 +26,11 @@ def check_single_instance():
         try:
             with open(LOCK_FILE) as f:
                 pid = int(f.read())
-            # 检查 pid 是否存在
             os.kill(pid, 0)
             log(f"[agent] 已有运行实例 PID={pid}, 退出")
             return False
         except:
-            pass  # pid 不存在，继续运行
-
-    # 写入当前 PID
+            pass
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
     return True
@@ -64,60 +63,61 @@ def get_uptime():
     except:
         return 0
 
-def get_lan_ip(retry=3, delay=1):
-    for _ in range(retry):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except:
-            time.sleep(delay)
-    return "unknown"
+def get_lan_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "unknown"
 
-def get_public_ip(retry=3, delay=1):
-    for _ in range(retry):
-        try:
-            return requests.get("https://api.ipify.org", timeout=3).text
-        except:
-            time.sleep(delay)
-    return "unknown"
+def get_public_ip():
+    try:
+        return requests.get("https://api.ipify.org", timeout=3).text
+    except:
+        return "unknown"
 
 def get_sysinfo():
-    cpu_percent = psutil.cpu_percent(interval=0.5)
-    mem = psutil.virtual_memory()
-    disk_info = []
-    for d in psutil.disk_partitions():
-        try:
-            usage = psutil.disk_usage(d.mountpoint)
-            disk_info.append({
-                "mount": d.mountpoint,
-                "total": usage.total,
-                "used": usage.used,
-                "percent": usage.percent
-            })
-        except:
-            continue
-    net = psutil.net_io_counters()
-    procs = []
-    for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
-                    key=lambda x: x.info["cpu_percent"], reverse=True)[:5]:
-        procs.append(p.info)
-    return {
-        "type": "update",
-        "agent_id": AGENT_ID,
-        "hostname": socket.gethostname(),
-        "os": platform.platform(),
-        "public_ip": get_public_ip(),
-        "lan_ip": get_lan_ip(),
-        "cpu": cpu_percent,
-        "memory": mem.percent,
-        "disk": disk_info,
-        "net": {"bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv},
-        "uptime": get_uptime(),
-        "top5": procs
-    }
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.5)
+        mem = psutil.virtual_memory()
+        disk_info = []
+        for d in psutil.disk_partitions():
+            try:
+                usage = psutil.disk_usage(d.mountpoint)
+                disk_info.append({
+                    "mount": d.mountpoint,
+                    "total": usage.total,
+                    "used": usage.used,
+                    "percent": usage.percent
+                })
+            except:
+                continue
+        net = psutil.net_io_counters()
+        procs = []
+        for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
+                        key=lambda x: x.info["cpu_percent"], reverse=True)[:5]:
+            procs.append(p.info)
+        return {
+            "type": "update",
+            "agent_id": AGENT_ID,
+            "hostname": socket.gethostname(),
+            "os": platform.platform(),
+            "public_ip": get_public_ip(),
+            "lan_ip": get_lan_ip(),
+            "cpu": cpu_percent,
+            "memory": mem.percent,
+            "disk": disk_info,
+            "net": {"bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv},
+            "uptime": get_uptime(),
+            "top5": procs
+        }
+    except Exception as e:
+        log(f"[agent] 获取系统信息异常: {e}")
+        return {"type": "update", "agent_id": AGENT_ID}
 
 # ---------------- 命令执行 ----------------
 def exec_cmd(cmd):
@@ -132,25 +132,25 @@ async def run_agent():
     retry_delay = 1
     while True:
         try:
-            async with websockets.connect(SERVER) as ws:
+            async with websockets.connect(
+                SERVER,
+                ping_interval=15,
+                ping_timeout=15,
+                close_timeout=5
+            ) as ws:
                 retry_delay = 1  # 重置延迟
-                # 注册
                 await ws.send(json.dumps({"type": "register", "agent_id": AGENT_ID}))
                 log(f"[agent] 已连接 server {SERVER}，ID={AGENT_ID}")
 
-                # 定时上报
                 async def reporter():
                     while True:
-                        info = get_sysinfo()
-                        info["lan_ip"] = get_lan_ip()
-                        info["public_ip"] = get_public_ip()
                         try:
+                            info = get_sysinfo()
                             await ws.send(json.dumps(info))
                         except Exception as e:
                             log(f"[agent] 上报失败: {e}")
                         await asyncio.sleep(REPORT_INTERVAL)
 
-                # 接收命令
                 async def listener():
                     async for msg in ws:
                         try:
@@ -167,15 +167,21 @@ async def run_agent():
                         except Exception as e:
                             log(f"[agent] 处理命令异常: {e}")
 
-                await asyncio.gather(reporter(), listener())
+                await asyncio.gather(reporter(), listener(), return_exceptions=True)
 
         except Exception as e:
-            log(f"[agent] 连接失败，重试中... {e}")
+            log(f"[agent] 连接失败或异常，重试中... {e}")
             await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60)  # 指数退避，最多 60 秒
+            retry_delay = min(retry_delay * 2, 60)  # 指数退避
 
 # ---------------- 启动 ----------------
 if __name__ == "__main__":
     if not check_single_instance():
         sys.exit(0)
-    asyncio.run(run_agent())
+
+    while True:
+        try:
+            asyncio.run(run_agent())
+        except Exception as e:
+            log(f"[agent] 异常退出: {e}")
+            time.sleep(5)
