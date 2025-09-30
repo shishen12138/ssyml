@@ -16,9 +16,25 @@ import threading
 # ---------------- 配置 ----------------
 SERVER = "ws://47.236.6.215:9001"  # 控制端地址
 REPORT_INTERVAL = 2                 # 上报间隔秒
-TOKEN_FILE = "/root/agent_token.txt"
-LOG_FILE = "/root/agent.log"
 LOCK_FILE = "/tmp/agent.lock"
+
+# ---------------- 日志 ----------------
+if sys.platform.startswith("win"):
+    log_path = os.path.join(os.path.expanduser("~"), "Desktop")
+else:
+    log_path = "/root"
+    if not os.access(log_path, os.W_OK):
+        log_path = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(log_path, "agent.log")
+
+def log(msg):
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    print(line)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except:
+        pass
 
 # ---------------- 单实例保护 ----------------
 def check_single_instance():
@@ -26,26 +42,18 @@ def check_single_instance():
         try:
             with open(LOCK_FILE) as f:
                 pid = int(f.read())
-            os.kill(pid, 0)
-            log(f"[agent] 已有运行实例 PID={pid}, 退出")
-            return False
+            # 检查 PID 是否存在
+            if psutil.pid_exists(pid):
+                log(f"[agent] 已有运行实例 PID={pid}, 退出")
+                return False
         except:
             pass
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
     return True
 
-# ---------------- 日志 ----------------
-def log(msg):
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line)
-    try:
-        with open(LOG_FILE, "a") as f:
-            f.write(line + "\n")
-    except:
-        pass
-
 # ---------------- Token ----------------
+TOKEN_FILE = os.path.join(log_path, "agent_token.txt")
 def get_or_create_token():
     if os.path.exists(TOKEN_FILE):
         return open(TOKEN_FILE).read().strip()
@@ -138,7 +146,7 @@ async def run_agent():
                 ping_timeout=15,
                 close_timeout=5
             ) as ws:
-                retry_delay = 1  # 重置延迟
+                retry_delay = 1
                 await ws.send(json.dumps({"type": "register", "agent_id": AGENT_ID}))
                 log(f"[agent] 已连接 server {SERVER}，ID={AGENT_ID}")
 
@@ -179,9 +187,7 @@ if __name__ == "__main__":
     if not check_single_instance():
         sys.exit(0)
 
-    while True:
-        try:
-            asyncio.run(run_agent())
-        except Exception as e:
-            log(f"[agent] 异常退出: {e}")
-            time.sleep(5)
+    try:
+        asyncio.run(run_agent())
+    except Exception as e:
+        log(f"[agent] 异常退出: {e}")
