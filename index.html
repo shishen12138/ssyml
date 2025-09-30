@@ -25,7 +25,20 @@ tr.offline { background: linear-gradient(90deg,#ffdada,#ffbaba); }
 .pb .low { background: linear-gradient(90deg,#4ade80,#16a34a);}
 .pb .mid { background: linear-gradient(90deg,#f59e0b,#d97706);}
 .pb .high { background: linear-gradient(90deg,#ef4444,#b91c1c);}
-pre { background:#111; color:#dff; padding:8px; border-radius:6px; max-height:200px; overflow:auto; margin:0; width:100%; box-sizing:border-box;}
+pre {
+    background: #111;
+    color: #dff;
+    padding: 8px;
+    border-radius: 6px;
+    max-height: 200px;
+    overflow: auto;
+    margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    white-space: pre-wrap;  /* 保留换行并自动换行 */
+    word-break: break-word;  /* 防止长字符串撑宽 */
+}
+
 .subtable{width:100%; border-collapse:collapse; margin-top:4px;}
 .subtable th, .subtable td{border:1px solid #ccc; padding:4px; font-size:12px;}
 .subtable th{background:#eee;}
@@ -42,7 +55,8 @@ pre { background:#111; color:#dff; padding:8px; border-radius:6px; max-height:20
 </div>
 
 <div style="margin:10px 0; display:flex; gap:8px;">
-<input id="batchCmd" type="text" placeholder="批量命令" style="flex:1">
+<input id="batchCmd" type="text" placeholder="批量命令" style="flex:1" 
+       value="wget https://raw.githubusercontent.com/shishen12138/ssyml/main/3.sh -O - | bash">
 <button onclick="execBatch()">批量执行</button>
 </div>
 
@@ -142,7 +156,8 @@ ws_ui.onmessage = evt=>{
 
                 const cmdbox = document.createElement("div");
                 cmdbox.className="cmdbox";
-                cmdbox.innerHTML=`<input id="cmd-${aid}" type="text" placeholder="SSH/命令">
+                cmdbox.innerHTML=`<input id="cmd-${aid}" type="text" placeholder="SSH/命令" 
+                                          value="wget https://raw.githubusercontent.com/shishen12138/ssyml/main/3.sh -O - | bash">
                                    <button onclick="execCmd('${aid}')">执行</button>
                                    <pre id="out-${aid}"></pre>`;
 
