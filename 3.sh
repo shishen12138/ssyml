@@ -17,18 +17,18 @@ WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 AGENT_SCRIPT="$WORKDIR/agent.py"
 
 # ---------------- 安装基础依赖 ----------------
-echo "安装系统基础依赖..."
+echo "安装依赖..."
+
 if [ -f /etc/debian_version ]; then
     apt update
-    apt install -y wget build-essential git python3-venv python3-pip python3-minimal python3-distutils python3-wheel python3-setuptools || true
-    dpkg --configure -a || true
-    apt install -f -y || true
+    apt install -y wget build-essential git python3.12-venv python3-pip python3-wheel
 elif [ -f /etc/redhat-release ]; then
-    yum install -y wget gcc gcc-c++ make git python3-venv python3-pip
+    yum install -y wget gcc gcc-c++ make git python3 python3-virtualenv python3-pip
 else
     echo "未知 Linux 发行版"
     exit 1
 fi
+
 
 # ---------------- 创建虚拟环境 ----------------
 echo "创建虚拟环境 $VENV_DIR..."
