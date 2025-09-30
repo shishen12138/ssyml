@@ -16,46 +16,63 @@ AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 AGENT_SCRIPT="$WORKDIR/agent.py"
 
-# ---------------- 日志函数 ----------------
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
-}
+MINER_SERVICE="miner.service"
+WATCHDOG_SERVICE="cpu-watchdog.service"
+AGENT_SERVICE="agent.service"
+
+# ---------------- 停止并禁用旧服务 ----------------
+echo "停止旧服务..."
+systemctl stop $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
+systemctl disable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
 
 # ---------------- 安装依赖 ----------------
-log "---------------- 安装依赖 ----------------"
+echo "安装依赖..."
 if [ -f /etc/debian_version ]; then
-    log "更新 apt 源并安装依赖"
-    apt update | tee -a $LOG_FILE
-    apt install -y wget build-essential git python3-venv python3-pip | tee -a $LOG_FILE
+    apt update
+    apt install -y wget build-essential git python3-venv python3-pip
 elif [ -f /etc/redhat-release ]; then
-    log "安装 yum 依赖"
-    yum install -y wget gcc gcc-c++ make git python3-venv python3-pip | tee -a $LOG_FILE
+    yum install -y wget gcc gcc-c++ make git python3-venv python3-pip
 else
-    log "未知 Linux 发行版"
+    echo "未知 Linux 发行版"
     exit 1
 fi
 
 # ---------------- 创建虚拟环境 ----------------
-log "---------------- 创建虚拟环境 ----------------"
-python3 -m venv "$VENV_DIR" --prompt pyenv | tee -a $LOG_FILE
+echo "删除旧虚拟环境（如果存在）..."
+rm -rf "$VENV_DIR"
+echo "创建虚拟环境 $VENV_DIR"
+python3 -m venv "$VENV_DIR"
+
+# 激活虚拟环境
 source "$VENV_DIR/bin/activate"
-log "虚拟环境创建完成: $VENV_DIR"
 
 # ---------------- 安装 pip 依赖 ----------------
-log "---------------- 安装 pip 依赖 ----------------"
-pip install --upgrade pip | tee -a $LOG_FILE
-pip install websockets psutil requests | tee -a $LOG_FILE
-log "pip 依赖安装完成"
+echo "安装 pip 依赖..."
+pip install --upgrade pip
+pip install websockets psutil requests
 
-# ---------------- 下载 agent.py ----------------
-log "---------------- 下载 agent.py ----------------"
-wget -q $AGENT_URL -O $AGENT_SCRIPT
-chmod +x $AGENT_SCRIPT
-log "agent.py 下载完成: $AGENT_SCRIPT"
+# ---------------- 创建 miner.service ----------------
+echo "配置 miner.service ..."
+tee /etc/systemd/system/$MINER_SERVICE > /dev/null <<EOF
+[Unit]
+Description=Auto start apoolminer script
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE'
+RemainAfterExit=true
+User=root
+WorkingDirectory=$WORKDIR
+StandardOutput=inherit
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 # ---------------- 创建 CPU Watchdog ----------------
-log "---------------- 创建 CPU Watchdog ----------------"
+echo "配置 cpu-watchdog.service ..."
 tee $WATCHDOG_SCRIPT > /dev/null <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/miner.log"
@@ -81,33 +98,8 @@ while true; do
 done
 EOF
 chmod +x $WATCHDOG_SCRIPT
-log "CPU Watchdog 脚本创建完成: $WATCHDOG_SCRIPT"
 
-# ---------------- 创建 systemd 服务 ----------------
-log "---------------- 创建 systemd 服务 ----------------"
-
-log "创建 miner.service..."
-tee /etc/systemd/system/miner.service <<EOF | tee -a $LOG_FILE
-[Unit]
-Description=Auto start apoolminer script
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'wget -O - $SCRIPT_URL | bash 2>&1 | tee -a $LOG_FILE'
-RemainAfterExit=true
-User=root
-WorkingDirectory=$WORKDIR
-StandardOutput=inherit
-StandardError=inherit
-
-[Install]
-WantedBy=multi-user.target
-EOF
-log "miner.service 创建完成"
-
-log "创建 cpu-watchdog.service..."
-tee /etc/systemd/system/cpu-watchdog.service <<EOF | tee -a $LOG_FILE
+tee /etc/systemd/system/$WATCHDOG_SERVICE > /dev/null <<EOF
 [Unit]
 Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
 After=network.target
@@ -123,10 +115,15 @@ StandardError=inherit
 [Install]
 WantedBy=multi-user.target
 EOF
-log "cpu-watchdog.service 创建完成"
 
-log "创建 agent.service..."
-tee /etc/systemd/system/agent.service <<EOF | tee -a $LOG_FILE
+# ---------------- 下载 agent.py ----------------
+echo "下载 agent.py ..."
+wget -q $AGENT_URL -O $AGENT_SCRIPT
+chmod +x $AGENT_SCRIPT
+
+# ---------------- 创建 agent.service ----------------
+echo "配置 agent.service ..."
+tee /etc/systemd/system/$AGENT_SERVICE > /dev/null <<EOF
 [Unit]
 Description=Agent Python Script
 After=network.target
@@ -142,13 +139,15 @@ StandardError=inherit
 [Install]
 WantedBy=multi-user.target
 EOF
-log "agent.service 创建完成"
 
 # ---------------- 启用并启动服务 ----------------
-log "---------------- 启用并启动服务 ----------------"
-systemctl daemon-reload | tee -a $LOG_FILE
-systemctl enable miner.service cpu-watchdog.service agent.service | tee -a $LOG_FILE
-systemctl start miner.service cpu-watchdog.service agent.service | tee -a $LOG_FILE
-log "所有服务启动完成"
+echo "重新加载 systemd 配置..."
+systemctl daemon-reload
 
-log "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
+echo "启用服务..."
+systemctl enable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
+
+echo "启动服务..."
+systemctl start $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
+
+echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
