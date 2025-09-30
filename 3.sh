@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-
 # ---------------- 提权检查 ----------------
 if [ "$EUID" -ne 0 ]; then
     echo "非 root 用户，使用 sudo 提权..."
