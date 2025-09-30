@@ -14,21 +14,37 @@ import sys
 # ---------------- 配置 ----------------
 SERVER = "ws://47.236.6.215:9001"  # 控制端地址
 REPORT_INTERVAL = 2                 # 上报间隔秒
-TOKEN_FILE = "agent_token.txt"
-PID_FILE = "/tmp/agent.pid"
+TOKEN_FILE = "/root/agent_token.txt"
+LOG_FILE = "/root/agent.log"
+LOCK_FILE = "/tmp/agent.lock"
 
-# ---------------- 单实例运行 ----------------
-def ensure_single_instance():
-    if os.path.exists(PID_FILE):
+# ---------------- 单实例保护 ----------------
+def check_single_instance():
+    if os.path.exists(LOCK_FILE):
         try:
-            old_pid = int(open(PID_FILE).read())
-            os.kill(old_pid, 0)  # 检查进程是否存在
-            print(f"[agent] 已有运行中的实例 (pid={old_pid})，退出")
-            sys.exit(0)
-        except ProcessLookupError:
-            pass  # 老 PID 不存在，继续运行
-    with open(PID_FILE, "w") as f:
+            with open(LOCK_FILE) as f:
+                pid = int(f.read())
+            # 检查 pid 是否存在
+            os.kill(pid, 0)
+            log(f"[agent] 已有运行实例 PID={pid}, 退出")
+            return False
+        except:
+            pass  # pid 不存在，继续运行
+
+    # 写入当前 PID
+    with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
+    return True
+
+# ---------------- 日志 ----------------
+def log(msg):
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    print(line)
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except:
+        pass
 
 # ---------------- Token ----------------
 def get_or_create_token():
@@ -41,15 +57,12 @@ def get_or_create_token():
 
 AGENT_ID = get_or_create_token()
 
-# ---------------- 工具函数 ----------------
-def safe(func, default=None):
-    try:
-        return func()
-    except Exception:
-        return default
-
+# ---------------- 系统信息 ----------------
 def get_uptime():
-    return safe(lambda: int(time.time() - psutil.boot_time()), 0)
+    try:
+        return int(time.time() - psutil.boot_time())
+    except:
+        return 0
 
 def get_lan_ip(retry=3, delay=1):
     for _ in range(retry):
@@ -66,16 +79,16 @@ def get_lan_ip(retry=3, delay=1):
 def get_public_ip(retry=3, delay=1):
     for _ in range(retry):
         try:
-            return requests.get("https://api.ipify.org", timeout=2).text
+            return requests.get("https://api.ipify.org", timeout=3).text
         except:
             time.sleep(delay)
     return "unknown"
 
 def get_sysinfo():
-    cpu_percent = safe(lambda: psutil.cpu_percent(interval=0.5), 0)
-    mem = safe(lambda: psutil.virtual_memory(), None)
+    cpu_percent = psutil.cpu_percent(interval=0.5)
+    mem = psutil.virtual_memory()
     disk_info = []
-    for d in safe(lambda: psutil.disk_partitions(), []):
+    for d in psutil.disk_partitions():
         try:
             usage = psutil.disk_usage(d.mountpoint)
             disk_info.append({
@@ -86,25 +99,22 @@ def get_sysinfo():
             })
         except:
             continue
-    net = safe(lambda: psutil.net_io_counters(), None)
+    net = psutil.net_io_counters()
     procs = []
-    try:
-        for p in sorted(psutil.process_iter(["pid","name","cpu_percent","memory_percent"]),
-                        key=lambda x: x.info["cpu_percent"], reverse=True)[:5]:
-            procs.append(p.info)
-    except:
-        pass
+    for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
+                    key=lambda x: x.info["cpu_percent"], reverse=True)[:5]:
+        procs.append(p.info)
     return {
         "type": "update",
         "agent_id": AGENT_ID,
-        "hostname": safe(socket.gethostname, "unknown"),
-        "os": safe(platform.platform, "unknown"),
+        "hostname": socket.gethostname(),
+        "os": platform.platform(),
         "public_ip": get_public_ip(),
         "lan_ip": get_lan_ip(),
         "cpu": cpu_percent,
-        "memory": mem.percent if mem else 0,
+        "memory": mem.percent,
         "disk": disk_info,
-        "net": {"bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv} if net else {"bytes_sent":0,"bytes_recv":0},
+        "net": {"bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv},
         "uptime": get_uptime(),
         "top5": procs
     }
@@ -115,25 +125,29 @@ def exec_cmd(cmd):
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
         return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
     except Exception as e:
-        return {"stdout":"", "stderr": str(e), "returncode": -1}
+        return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 # ---------------- Agent 主逻辑 ----------------
 async def run_agent():
+    retry_delay = 1
     while True:
         try:
             async with websockets.connect(SERVER) as ws:
+                retry_delay = 1  # 重置延迟
                 # 注册
                 await ws.send(json.dumps({"type": "register", "agent_id": AGENT_ID}))
-                print(f"[agent] 已连接 server {SERVER}，ID={AGENT_ID}")
+                log(f"[agent] 已连接 server {SERVER}，ID={AGENT_ID}")
 
                 # 定时上报
                 async def reporter():
                     while True:
+                        info = get_sysinfo()
+                        info["lan_ip"] = get_lan_ip()
+                        info["public_ip"] = get_public_ip()
                         try:
-                            info = get_sysinfo()
                             await ws.send(json.dumps(info))
                         except Exception as e:
-                            print("[agent] reporter 错误:", e)
+                            log(f"[agent] 上报失败: {e}")
                         await asyncio.sleep(REPORT_INTERVAL)
 
                 # 接收命令
@@ -143,7 +157,7 @@ async def run_agent():
                             data = json.loads(msg)
                             if data.get("type") == "exec":
                                 cmd = data.get("cmd")
-                                print(f"[agent] 执行命令: {cmd}")
+                                log(f"[agent] 执行命令: {cmd}")
                                 res = exec_cmd(cmd)
                                 await ws.send(json.dumps({
                                     "type": "cmd_result",
@@ -151,15 +165,17 @@ async def run_agent():
                                     "payload": res
                                 }))
                         except Exception as e:
-                            print("[agent] listener 错误:", e)
+                            log(f"[agent] 处理命令异常: {e}")
 
                 await asyncio.gather(reporter(), listener())
 
         except Exception as e:
-            print("[agent] 连接失败，重试中...", e)
-            await asyncio.sleep(5)
+            log(f"[agent] 连接失败，重试中... {e}")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)  # 指数退避，最多 60 秒
 
 # ---------------- 启动 ----------------
 if __name__ == "__main__":
-    ensure_single_instance()
+    if not check_single_instance():
+        sys.exit(0)
     asyncio.run(run_agent())
