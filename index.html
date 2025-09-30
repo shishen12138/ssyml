@@ -35,10 +35,9 @@ pre {
     margin: 0;
     width: 100%;
     box-sizing: border-box;
-    white-space: pre-wrap;  /* 保留换行并自动换行 */
-    word-break: break-word;  /* 防止长字符串撑宽 */
+    white-space: pre-wrap;
+    word-break: break-word;
 }
-
 .subtable{width:100%; border-collapse:collapse; margin-top:4px;}
 .subtable th, .subtable td{border:1px solid #ccc; padding:4px; font-size:12px;}
 .subtable th{background:#eee;}
@@ -172,23 +171,43 @@ ws_ui.onmessage = evt=>{
                 exp.appendChild(td);
                 tbody.appendChild(exp);
 
-                agentRows[aid]={tr, exp, cpuDiv:tr.children[3].firstChild.firstChild, memDiv:tr.children[4].firstChild.firstChild, diskTable, procTable, logPre:cmdbox.querySelector("pre")};
+                agentRows[aid]={tr, exp, cpuDiv:tr.children[3].firstChild.firstChild, memDiv:tr.children[4].firstChild.firstChild, diskTable, procTable, logPre:cmdbox.querySelector("pre"), netCell:tr.children[5]};
             }
 
-            // 更新数据
             const r = agentRows[aid];
             r.tr.className = a.online?"online":"offline";
-			r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
-			r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
+            r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
+            r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
             r.tr.children[3].firstChild.firstChild.style.width = (a.cpu||0)+"%";
             r.tr.children[3].firstChild.firstChild.innerText = Math.round(a.cpu||0)+"%";
             r.tr.children[3].firstChild.firstChild.className="inner "+usageClass(a.cpu||0);
-
             r.tr.children[4].firstChild.firstChild.style.width = (a.memory||0)+"%";
             r.tr.children[4].firstChild.firstChild.innerText = Math.round(a.memory||0)+"%";
             r.tr.children[4].firstChild.firstChild.className="inner "+usageClass(a.memory||0);
 
-            r.tr.children[5].innerText = formatBytes(a.net?.bytes_sent)+"/"+formatBytes(a.net?.bytes_recv);
+            // ---------------- 流量显示切换 ----------------
+            const netCell = r.netCell;
+            if(!netCell.dataset.show) netCell.dataset.show="real"; // 默认实时
+            const up = a.net?.up_speed||0;
+            const down = a.net?.down_speed||0;
+            const totalSent = a.net?.bytes_sent||0;
+            const totalRecv = a.net?.bytes_recv||0;
+
+            if(netCell.dataset.show==="real"){
+                netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
+            } else {
+                netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
+            }
+            netCell.onclick = ()=>{
+                if(netCell.dataset.show==="real"){
+                    netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
+                    netCell.dataset.show="total";
+                } else {
+                    netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
+                    netCell.dataset.show="real";
+                }
+            };
+
             r.tr.children[6].innerText = formatUptime(a.uptime);
             r.tr.children[7].innerText = a.online?"在线":"离线";
 
@@ -264,5 +283,5 @@ function execBatch(){
     });
 }
 </script>
-</body>
+</body> 
 </html>
