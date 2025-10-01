@@ -104,3 +104,4 @@ EOF
 echo "启动 miner..."
 bash run.sh &
 echo "矿工已启动"
+
