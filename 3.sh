@@ -3,7 +3,7 @@ set -e
 
 # ---------------- 提权检查 ----------------
 if [ "$EUID" -ne 0 ]; then
-    echo "非 root 用户，尝试使用 sudo 提权..."
+    echo "非 root 用户，使用 sudo 提权..."
     exec sudo bash "$0" "$@"
 fi
 
@@ -26,7 +26,7 @@ SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
 AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 
 # ---------------- 清理旧环境 ----------------
-echo "🔹 清理旧服务和文件..."
+echo "🔹 清理旧服务和环境..."
 systemctl stop $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
 systemctl disable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
 rm -f /etc/systemd/system/$MINER_SERVICE /etc/systemd/system/$WATCHDOG_SERVICE /etc/systemd/system/$AGENT_SERVICE
@@ -55,13 +55,16 @@ else
     exit 1
 fi
 
-# ---------------- 创建虚拟环境 ----------------
-echo "🔹 创建 Python 虚拟环境..."
+# ---------------- 找到可用 Python ----------------
 PYTHON_BIN=$(command -v python3 || command -v python || true)
 if [ -z "$PYTHON_BIN" ]; then
     echo "❌ 系统未安装 Python"
     exit 1
 fi
+echo "✅ 使用 Python: $PYTHON_BIN"
+
+# ---------------- 创建虚拟环境 ----------------
+echo "🔹 创建虚拟环境..."
 $PYTHON_BIN -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
@@ -77,15 +80,10 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c '$WORKDIR/1.sh 2>&1 | tee -a $MINER_LOG'
-Restart=on-failure
-RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $MINER_LOG'
+Restart=always
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -95,43 +93,88 @@ EOF
 cat > $WATCHDOG_SCRIPT <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/watchdog.log"
+MINER_SERVICE="miner.service"
+CHECK_INTERVAL=300  # 每 5 分钟检测一次
+LOW_COUNT=0
 THRESHOLD=50
 MAX_LOW=3
-LOW_COUNT=0
-echo "$(date) watchdog 启动" | tee -a $LOG_FILE
+MINER_BASE="/root"
+MINER_DIR="$MINER_BASE/apoolminer_linux_qubic_autoupdate"
+UPDATE_URL="https://github.com/apool-io/apoolminer/releases/latest"
+
+echo "$(date) Watchdog 启动" | tee -a $LOG_FILE
+
+get_latest_version() {
+    curl -sL -o /dev/null -w "%{url_effective}" $UPDATE_URL | awk -F '/' '{print $NF}'
+}
+
+get_current_version() {
+    [ -f "$MINER_DIR/version.txt" ] && cat "$MINER_DIR/version.txt" || echo "none"
+}
+
+update_miner() {
+    local latest=$1
+    echo "$(date) 检测到新版本 $latest，正在更新..." | tee -a $LOG_FILE
+
+    cd "$MINER_BASE"
+    wget -q "https://github.com/apool-io/apoolminer/releases/download/$latest/apoolminer_linux_qubic_autoupdate_${latest}.tar.gz" -O miner_update.tar.gz
+    tar -xzf miner_update.tar.gz
+    rm -f miner_update.tar.gz
+
+    # 保留旧配置
+    if [ -f "$MINER_DIR/miner.conf" ]; then
+        cp "$MINER_DIR/miner.conf" "$MINER_DIR/miner.conf.bak"
+    fi
+
+    # 如果新版本没有配置，则恢复旧配置
+    if [ ! -f "$MINER_DIR/miner.conf" ] && [ -f "$MINER_DIR/miner.conf.bak" ]; then
+        cp "$MINER_DIR/miner.conf.bak" "$MINER_DIR/miner.conf"
+    fi
+
+    echo "$latest" > "$MINER_DIR/version.txt"
+    echo "$(date) 更新完成，重启 Miner 服务..." | tee -a $LOG_FILE
+    systemctl restart $MINER_SERVICE
+}
+
 while true; do
+    # CPU 使用率检测
     IDLE=$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print $8}' | cut -d. -f1)
     USAGE=$((100 - IDLE))
     echo "$(date) CPU 使用率: $USAGE%" | tee -a $LOG_FILE
+
     if [ "$USAGE" -lt "$THRESHOLD" ]; then
         LOW_COUNT=$((LOW_COUNT+1))
-        echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" | tee -a $LOG_FILE
         if [ "$LOW_COUNT" -ge "$MAX_LOW" ]; then
-            echo "$(date) CPU 连续低使用，重启 miner 服务..." | tee -a $LOG_FILE
-            systemctl restart miner.service || reboot
+            echo "$(date) CPU 连续低负载，重启 Miner 服务..." | tee -a $LOG_FILE
+            systemctl restart $MINER_SERVICE || true
             LOW_COUNT=0
         fi
     else
         LOW_COUNT=0
     fi
-    sleep 30
+
+    # 自动更新检测
+    LATEST_VER=$(get_latest_version)
+    CURRENT_VER=$(get_current_version)
+    if [ "$LATEST_VER" != "$CURRENT_VER" ]; then
+        update_miner "$LATEST_VER"
+    fi
+
+    sleep $CHECK_INTERVAL
 done
 EOF
 chmod +x $WATCHDOG_SCRIPT
 
 cat > /etc/systemd/system/$WATCHDOG_SERVICE <<EOF
 [Unit]
-Description=CPU watchdog (重启 miner 服务)
+Description=CPU Watchdog & Auto-update Miner
 After=network.target
 
 [Service]
 ExecStart=/bin/bash $WATCHDOG_SCRIPT
 Restart=always
-RestartSec=30
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -149,26 +192,11 @@ After=network.target
 [Service]
 ExecStart=$VENV_DIR/bin/python $AGENT_SCRIPT
 Restart=always
-RestartSec=10
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF
-
-# ---------------- 日志轮转 ----------------
-cat > /etc/logrotate.d/miner <<EOF
-$MINER_LOG $WATCHDOG_LOG $AGENT_LOG {
-    daily
-    rotate 7
-    compress
-    missingok
-    notifempty
-    copytruncate
-}
 EOF
 
 # ---------------- 启动服务 ----------------
