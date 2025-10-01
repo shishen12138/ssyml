@@ -9,7 +9,7 @@ try:
     AGENT_ID = open("/root/agent_id.txt").read().strip()
 except:
     AGENT_ID = str(uuid.uuid4())
-    open("/tmp/agent_id.txt", "w").write(AGENT_ID)
+    open("/root/agent_id.txt", "w").write(AGENT_ID)
 
 _net_last = {"s": psutil.net_io_counters().bytes_sent,
              "r": psutil.net_io_counters().bytes_recv,
