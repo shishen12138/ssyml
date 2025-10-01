@@ -98,7 +98,7 @@ def get_sysinfo():
 # 命令执行
 def exec_cmd(cmd):
     try:
-        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=30)
+        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=120)
         return {"stdout":r.stdout,"stderr":r.stderr,"returncode":r.returncode}
     except Exception as e:
         return {"stdout":"","stderr":str(e),"returncode":-1}
