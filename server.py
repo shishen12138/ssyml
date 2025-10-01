@@ -97,7 +97,7 @@ async def handle_ui(ws):
                         a = agents.get(aid)
                         if a and a.get("ws"):
                             try: 
-                                await a["ws"].send(json.dumps({"type":"exec","cmd":cmd}))
+                                await a["ws"].send(json.dumps({"type":"exec","cmd":cmd,"agents":[aid]}))
                                 print(f"[Controller] 向 Agent {aid} 下发命令: {cmd}")
                             except: pass
 
