@@ -6,7 +6,7 @@ REPORT_INTERVAL = 1
 
 # agent ID 保持不变
 try:
-    AGENT_ID = open("/tmp/agent_id.txt").read().strip()
+    AGENT_ID = open("/root/agent_id.txt").read().strip()
 except:
     AGENT_ID = str(uuid.uuid4())
     open("/tmp/agent_id.txt", "w").write(AGENT_ID)
@@ -44,7 +44,6 @@ def get_sysinfo():
         cpu = psutil.cpu_percent(interval=None)
         mem = psutil.virtual_memory().percent
 
-        # 磁盘信息
         disk = []
         for d in psutil.disk_partitions():
             try:
@@ -58,7 +57,6 @@ def get_sysinfo():
             except:
                 pass
 
-        # 网络流量
         net = psutil.net_io_counters()
         dt = now - _net_last["t"]
         up_speed = (net.bytes_sent - _net_last["s"]) / dt if dt > 0 else 0
@@ -87,20 +85,17 @@ def get_sysinfo():
     except Exception as e:
         return {"type": "update", "agent_id": AGENT_ID, "error": str(e)}
 
-def exec_cmd(cmd):
-    """同步执行命令并返回结果"""
+def exec_cmd_background(cmd):
+    """后台执行命令，不阻塞 agent"""
     try:
-        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=120)
-        return {"cmd": cmd, "output": out.decode(errors="ignore")}
-    except subprocess.CalledProcessError as e:
-        return {"cmd": cmd, "error": e.output.decode(errors="ignore")}
+        subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"cmd": cmd, "output": "已在后台执行"}
     except Exception as e:
         return {"cmd": cmd, "error": str(e)}
 
 async def run_cmd_async(ws, cmd):
-    """后台异步执行命令"""
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, exec_cmd, cmd)
+    """后台异步执行命令并回报下发状态"""
+    result = exec_cmd_background(cmd)
     try:
         await ws.send(json.dumps({
             "type": "cmd_result",
@@ -132,12 +127,12 @@ async def agent_loop():
                             data = json.loads(msg)
                             print(f"[Agent] 收到消息: {data}")
                             if data.get("type") == "exec":
-                                agents_list = data.get("agents", [])
+                                # 如果没有 agents 字段，则默认本 agent 执行
+                                agents_list = data.get("agents", [AGENT_ID])
                                 if AGENT_ID not in agents_list:
                                     continue
                                 cmd = data.get("cmd")
                                 if cmd:
-                                    # 异步后台执行命令
                                     asyncio.create_task(run_cmd_async(ws, cmd))
                         except Exception as e:
                             print(f"[Agent] 处理消息出错: {e}")
@@ -150,5 +145,3 @@ async def agent_loop():
 
 if __name__ == "__main__":
     asyncio.run(agent_loop())
-
-
