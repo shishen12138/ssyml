@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ---------------- 提权检查 ----------------
+# ---------------- 提权 ----------------
 if [ "$EUID" -ne 0 ]; then
     echo "非 root 用户，使用 sudo 提权..."
     exec sudo bash "$0" "$@"
@@ -12,18 +12,18 @@ WORKDIR="/root"
 VENV_DIR="$WORKDIR/pyenv"
 
 MINER_SERVICE="miner.service"
-WATCHDOG_SERVICE="cpu-watchdog.service"
+WATCHDOG_SERVICE="watchdog_updater.service"
 AGENT_SERVICE="agent.service"
 
 MINER_LOG="$WORKDIR/miner.log"
-WATCHDOG_LOG="$WORKDIR/watchdog.log"
+WATCHDOG_LOG="$WORKDIR/watchdog_updater.log"
 AGENT_LOG="$WORKDIR/agent.log"
-
-WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
-AGENT_SCRIPT="$WORKDIR/agent.py"
 
 SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
 AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
+
+WATCHDOG_SCRIPT="$WORKDIR/watchdog_updater.sh"
+AGENT_SCRIPT="$WORKDIR/agent.py"
 
 # ---------------- 清理旧环境 ----------------
 echo "🔹 清理旧服务和环境..."
@@ -39,17 +39,17 @@ systemctl reset-failed || true
 echo "🔹 安装依赖..."
 if command -v apt >/dev/null 2>&1; then
     apt update -y
-    apt install -y wget curl git python3 python3-venv python3-pip gcc make
+    apt install -y wget curl git python3 python3-venv python3-pip gcc make tar
 elif command -v yum >/dev/null 2>&1; then
-    yum install -y wget curl git python3 python3-virtualenv python3-pip gcc make
+    yum install -y wget curl git python3 python3-virtualenv python3-pip gcc make tar
 elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y wget curl git python3 python3-virtualenv python3-pip gcc make
+    dnf install -y wget curl git python3 python3-virtualenv python3-pip gcc make tar
 elif command -v zypper >/dev/null 2>&1; then
-    zypper install -y wget curl git python3 python3-venv python3-pip gcc make
+    zypper install -y wget curl git python3 python3-venv python3-pip gcc make tar
 elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm wget curl git python python-virtualenv python-pip base-devel
+    pacman -Sy --noconfirm wget curl git python python-virtualenv python-pip base-devel tar
 elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache wget curl git python3 py3-virtualenv py3-pip build-base
+    apk add --no-cache wget curl git python3 py3-virtualenv py3-pip build-base tar
 else
     echo "❌ 未找到支持的包管理器，请手动安装依赖"
     exit 1
@@ -89,29 +89,56 @@ WorkingDirectory=$WORKDIR
 WantedBy=multi-user.target
 EOF
 
-# ---------------- watchdog 脚本 ----------------
+# ---------------- watchdog+updater ----------------
 cat > $WATCHDOG_SCRIPT <<'EOF'
 #!/bin/bash
-LOG_FILE="/root/watchdog.log"
+set -e
+LOG_FILE="/root/watchdog_updater.log"
+MINER_SERVICE="miner.service"
+BASE_DIR="/root"
+VERSION_FILE="$BASE_DIR/apoolminer_linux_qubic_autoupdate/version.txt"
+REPO_API="https://api.github.com/repos/apool-io/apoolminer/releases/latest"
 THRESHOLD=50
 MAX_LOW=3
 LOW_COUNT=0
-echo "$(date) watchdog 启动" | tee -a $LOG_FILE
+LAST_UPDATE_CHECK=0
+UPDATE_INTERVAL=3600
+
+echo "$(date) Watchdog+Updater 启动" | tee -a $LOG_FILE
+
 while true; do
+    # CPU监控
     IDLE=$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print $8}' | cut -d. -f1)
     USAGE=$((100 - IDLE))
     echo "$(date) CPU 使用率: $USAGE%" | tee -a $LOG_FILE
     if [ "$USAGE" -lt "$THRESHOLD" ]; then
         LOW_COUNT=$((LOW_COUNT+1))
-        echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" | tee -a $LOG_FILE
         if [ "$LOW_COUNT" -ge "$MAX_LOW" ]; then
-            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启 miner.service..." | tee -a $LOG_FILE
-            systemctl restart miner.service || reboot
+            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启 miner.service" | tee -a $LOG_FILE
+            systemctl restart $MINER_SERVICE || reboot
             LOW_COUNT=0
         fi
     else
         LOW_COUNT=0
     fi
+
+    # 自动更新
+    NOW=$(date +%s)
+    if (( NOW - LAST_UPDATE_CHECK >= UPDATE_INTERVAL )); then
+        LAST_UPDATE_CHECK=$NOW
+        LATEST=$(curl -s $REPO_API | grep '"tag_name":' | head -1 | awk -F'"' '{print $4}')
+        LOCAL="none"
+        [ -f "$VERSION_FILE" ] && LOCAL=$(cat "$VERSION_FILE")
+        if [ "$LATEST" != "$LOCAL" ]; then
+            echo "$(date) 检测到新版本 $LATEST，开始更新..." | tee -a $LOG_FILE
+            wget -q "https://github.com/apool-io/apoolminer/releases/download/$LATEST/apoolminer_linux_qubic_autoupdate_${LATEST}.tar.gz" -O "$BASE_DIR/miner.tar.gz"
+            tar -xzf "$BASE_DIR/miner.tar.gz" -C "$BASE_DIR"
+            echo "$LATEST" > "$VERSION_FILE"
+            systemctl restart $MINER_SERVICE
+            echo "$(date) 更新完成" | tee -a $LOG_FILE
+        fi
+    fi
+
     sleep 30
 done
 EOF
@@ -119,7 +146,7 @@ chmod +x $WATCHDOG_SCRIPT
 
 cat > /etc/systemd/system/$WATCHDOG_SERVICE <<EOF
 [Unit]
-Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
+Description=Watchdog + Miner Auto Updater
 After=network.target
 
 [Service]
