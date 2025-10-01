@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import asyncio, websockets, psutil, platform, socket, json, time, subprocess, uuid, requests, os
 
-SERVER = "ws://47.236.6.215:9002"  # 后端地址
+SERVER = "ws://47.236.6.215:9002"  # 控制端地址
 REPORT_INTERVAL = 0.5
 
 # 生成或读取 agent_id
@@ -80,7 +80,9 @@ async def agent_loop():
     retry_delay = 1
     while True:
         try:
-            async with websockets.connect(S, ping_interval=30, ping_timeout=30) as ws:
+            async with websockets.connect(SERVER, ping_interval=30, ping_timeout=30) as ws:
+                print(f"[Agent] 已连接控制端 {SERVER}")
+
                 # 注册
                 try:
                     await ws.send(json.dumps({"type": "register", "agent_id": AGENT_ID}))
@@ -103,7 +105,8 @@ async def agent_loop():
                             if data.get("type") == "exec":
                                 cmd = data.get("cmd")
                                 res = await asyncio.to_thread(exec_cmd, cmd)
-                                try: await ws.send(json.dumps({"type": "cmd_result", "agent_id": AGENT_ID, "payload": res}))
+                                try: 
+                                    await ws.send(json.dumps({"type": "cmd_result", "agent_id": AGENT_ID, "payload": res}))
                                 except: pass
                                 # 执行完命令后立即上报一次状态
                                 try: await ws.send(json.dumps(get_sysinfo()))
@@ -112,11 +115,15 @@ async def agent_loop():
 
                 await asyncio.gather(reporter(), listener())
 
-        except: 
+        except Exception as e: 
+            print(f"[Agent] 连接失败，{retry_delay}s 后重试... 错误: {e}")
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 60)
 
 if __name__ == "__main__":
     try: asyncio.run(agent_loop())
-    except: pass
+    except KeyboardInterrupt:
+        print("[Agent] 退出")
+
+
 
