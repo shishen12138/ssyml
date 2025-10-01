@@ -102,5 +102,5 @@ EOF
 
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
-bash run.sh &
+bash run.sh
 echo "矿工已启动"
