@@ -90,40 +90,44 @@ CPU_THRESHOLD=50
 CPU_MAX_LOW=3
 CPU_LOW_COUNT=0
 
-# 下载最新 1.sh
-echo "$(date) 下载 1.sh" | tee -a $LOG_FILE
-wget -q -O "$SCRIPT" "https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
-chmod +x "$SCRIPT"
+# 函数：下载并同步执行最新 1.sh
+run_latest_script() {
+    echo "$(date) 下载最新 1.sh" | tee -a "$LOG_FILE"
+    wget -q -O "$SCRIPT" "https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
+    chmod +x "$SCRIPT"
+    echo "$(date) 执行 1.sh" | tee -a "$LOG_FILE"
+    /bin/bash "$SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+}
 
-# 启动 1.sh
-echo "$(date) 启动 1.sh" | tee -a $LOG_FILE
-/bin/bash "$SCRIPT" 2>&1 | tee -a $LOG_FILE &
-# 延时 30 秒检查 apoolminer 是否在运行
-sleep 30
+# 开机启动时下载并同步执行一次
+run_latest_script
+
+# 循环检测进程和 CPU
 while true; do
     # 检查 apoolminer 是否在运行
     if ! pgrep -f "apoolminer" > /dev/null; then
-        echo "$(date) apoolminer 未运行，重新执行 1.sh" | tee -a $LOG_FILE
-        /bin/bash "$SCRIPT" 2>&1 | tee -a $LOG_FILE &
+        echo "$(date) apoolminer 未运行，重新下载并执行 1.sh" | tee -a "$LOG_FILE"
+        run_latest_script
     fi
 
     # CPU 使用率监控
     IDLE=$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print $8}' | cut -d. -f1)
     USAGE=$((100 - IDLE))
-    echo "$(date) CPU 使用率: $USAGE%" | tee -a $LOG_FILE
+    echo "$(date) CPU 使用率: $USAGE%" | tee -a "$LOG_FILE"
 
     if [ "$USAGE" -lt "$CPU_THRESHOLD" ]; then
         CPU_LOW_COUNT=$((CPU_LOW_COUNT+1))
-        echo "$(date) CPU < $CPU_THRESHOLD%，连续低使用次数: $CPU_LOW_COUNT" | tee -a $LOG_FILE
+        echo "$(date) CPU < $CPU_THRESHOLD%，连续低使用次数: $CPU_LOW_COUNT" | tee -a "$LOG_FILE"
         if [ "$CPU_LOW_COUNT" -ge "$CPU_MAX_LOW" ]; then
-            echo "$(date) CPU 连续低于 $CPU_THRESHOLD% $CPU_MAX_LOW 次，重新执行 1.sh" | tee -a $LOG_FILE
-            /bin/bash "$SCRIPT" 2>&1 | tee -a $LOG_FILE &
+            echo "$(date) CPU 连续低于 $CPU_THRESHOLD% $CPU_MAX_LOW 次，重新下载并执行 1.sh" | tee -a "$LOG_FILE"
+            run_latest_script
             CPU_LOW_COUNT=0
         fi
     else
         CPU_LOW_COUNT=0
     fi
 
+    # 循环间隔 30 秒
     sleep 30
 done
 EOF
