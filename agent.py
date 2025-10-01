@@ -12,7 +12,7 @@ import uuid
 import requests
 
 SERVER = "ws://47.236.6.215:9001"
-REPORT_INTERVAL = 0.2
+REPORT_INTERVAL = 0.5
 TOKEN_FILE = "agent_token.txt"
 
 # ---------------- Token ----------------
