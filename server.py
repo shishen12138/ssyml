@@ -17,6 +17,7 @@ agents_lock = asyncio.Lock()
 # ---------------- 工具函数 ----------------
 def agent_info(aid, v, now=None):
     now = now or time.time()
+    # 只要 last 更新时间在 HEARTBEAT_TIMEOUT 内，就认为在线
     online = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
     info = v.get("info", {}).copy() if v.get("info") else {}
     info.update({"agent_id": aid, "online": online})
@@ -50,11 +51,11 @@ async def handle_agent(ws):
             elif data.get("type")=="update" and aid:
                 async with agents_lock:
                     a = agents.get(aid)
-                    if a: a.update({"last":time.time(),"online":True,"info":data})
+                    if a:
+                        a.update({"last":time.time(),"online":True,"info":data})
 
-                # ✅ 打印完整上报信息
+                # 打印完整上报信息
                 print(f"[Controller] Agent {aid} 上报: {json.dumps(data, ensure_ascii=False)}")
-
                 await broadcast_ui({"type":"agent_update","agent":agent_info(aid, agents[aid])})
 
             # 命令返回
@@ -86,6 +87,7 @@ async def handle_ui(ws):
         async for msg in ws:
             try: data = json.loads(msg)
             except: continue
+
             # 执行命令
             if data.get("type")=="exec" and data.get("auth")==AUTH_TOKEN:
                 cmd = data.get("cmd")
@@ -118,14 +120,15 @@ async def handle_ui(ws):
 # ---------------- 心跳 ----------------
 async def heartbeat():
     while True:
-        now=time.time()
+        now = time.time()
         async with agents_lock:
-            for aid,v in list(agents.items()):
-                online=bool(v.get("ws") and (now-v.get("last",0)<HEARTBEAT_TIMEOUT))
-                if v.get("online")!=online:
-                    v["online"]=online
+            for aid, v in list(agents.items()):
+                # 只要 WebSocket 存在且 last 更新时间在 HEARTBEAT_TIMEOUT 内，就在线
+                online = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
+                if v.get("online") != online:
+                    v["online"] = online
                     asyncio.create_task(broadcast_ui({"type":"agent_status","agent_id":aid,"online":online}))
-                    print(f"[Controller] Agent {aid} 在线状态更新: {online}")
+                    print(f"[Heartbeat] Agent {aid} 在线状态更新: {online}")
         await asyncio.sleep(5)
 
 # ---------------- HTTP 前端 ----------------
