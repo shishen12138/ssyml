@@ -21,7 +21,7 @@ tr.offline { background: linear-gradient(90deg,#ffdada,#ffbaba); }
 .cmdbox pre{background:#111; color:#dff; padding:8px; border-radius:6px; max-height:150px; overflow:auto; margin:0; width:100%; box-sizing:border-box;}
 .netpanel{margin-top:12px;padding:12px;border:1px solid #ddd;border-radius:8px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.05);}
 .pb { width:160px; height:18px; background:#eee; border-radius:12px; overflow:hidden; position:relative; margin:auto;}
-.pb .inner { height:100%; width:0%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:#fff; white-space:nowrap; transition:width 0.6s ease;}
+.pb .inner { height:100%; width:0%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:#fff; white-space:nowrap; transition: width 0.6s ease, background 0.6s ease;}
 .pb .low { background: linear-gradient(90deg,#4ade80,#16a34a);}
 .pb .mid { background: linear-gradient(90deg,#f59e0b,#d97706);}
 .pb .high { background: linear-gradient(90deg,#ef4444,#b91c1c);}
@@ -104,6 +104,17 @@ function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g,m=>({"&":"&
 function usageClass(p){ if(p<60) return "low"; if(p<85) return "mid"; return "high"; }
 function formatCmdResult(p){ if(!p) return ""; return JSON.stringify(p,null,2); }
 
+function updateStats(){
+    const total = Object.keys(agents).length;
+    const onlineCount = Object.values(agents).filter(a => a.online).length;
+    const offlineCount = total - onlineCount;
+    document.getElementById("total").innerText = total;
+    document.getElementById("online").innerText = onlineCount;
+    document.getElementById("offline").innerText = offlineCount;
+    document.getElementById("clients").innerText = Object.keys(agentRows).length;
+}
+
+// ---------------- websocket ----------------
 ws_ui.onmessage = evt=>{
     const msg=JSON.parse(evt.data);
     if(msg.type==='full_snapshot' || msg.type==='summary' || msg.type==='agent_add' || msg.type==='agent_update'){
@@ -111,16 +122,13 @@ ws_ui.onmessage = evt=>{
     } else if(msg.type==='agent_status'){ 
         const aid = msg.agent_id;
         const online = msg.online;
+        if(agents[aid]) agents[aid].online = online;
         const r = agentRows[aid];
         if(r){
             r.tr.className = online ? "online" : "offline";
             r.tr.children[7].innerText = online ? "在线" : "离线";
         }
-        const total = Object.keys(agents).length;
-        const onlineCount = Object.values(agentRows).filter(x => x.tr.className === "online").length;
-        document.getElementById("total").innerText = total;
-        document.getElementById("online").innerText = onlineCount;
-        document.getElementById("offline").innerText = total - onlineCount;
+        updateStats();
     } else if(msg.type==='cmd_result'){
         const aid = msg.agent_id;
         const r = agentRows[aid];
@@ -131,25 +139,19 @@ ws_ui.onmessage = evt=>{
     }
 };
 
-
+// ---------------- UI ----------------
 function updateUI(msg){
-    const summary = msg.summary || {};
-    document.getElementById("total").innerText = summary.total||Object.keys(agents).length;
-    document.getElementById("online").innerText = summary.online||0;
-    document.getElementById("offline").innerText = summary.offline||0;
-    document.getElementById("clients").innerText = msg.clients||0;
-
     const tbody = document.getElementById("tbody");
     const agentList = msg.agents || (msg.agent? [msg.agent]:[]);
-
     agentList.forEach((a, idx)=>{
         const aid = a.agent_id;
-        agents[aid] = a;
+        agents[aid] = {...agents[aid], ...a};
+        if(agents[aid].online===undefined) agents[aid].online = a.online;
 
         if(!agentRows[aid]){
             const tr = document.createElement("tr");
             tr.className = a.online?"online":"offline";
-            const uid="row"+idx;
+            const uid="expand-"+aid;
 
             tr.innerHTML=`
             <td><input type="checkbox" class="rowchk" value="${aid}"></td>
@@ -164,7 +166,6 @@ function updateUI(msg){
                 <button onclick="toggleExpand('${uid}')">展开</button>
                 <button onclick="deleteAgent('${aid}')">删除</button>
             </td>`;
-
             tbody.appendChild(tr);
 
             const exp = document.createElement("tr");
@@ -193,7 +194,6 @@ function updateUI(msg){
             td.appendChild(diskTable);
             td.appendChild(procTable);
             td.appendChild(cmdbox);
-
             exp.appendChild(td);
             tbody.appendChild(exp);
 
@@ -201,15 +201,17 @@ function updateUI(msg){
         }
 
         const r = agentRows[aid];
-        r.tr.className = a.online?"online":"offline";
-        r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
-        r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
-        r.tr.children[3].firstChild.firstChild.style.width = (a.cpu||0)+"%";
-        r.tr.children[3].firstChild.firstChild.innerText = Math.round(a.cpu||0)+"%";
-        r.tr.children[3].firstChild.firstChild.className="inner "+usageClass(a.cpu||0);
-        r.tr.children[4].firstChild.firstChild.style.width = (a.memory||0)+"%";
-        r.tr.children[4].firstChild.firstChild.innerText = Math.round(a.memory||0)+"%";
-        r.tr.children[4].firstChild.firstChild.className="inner "+usageClass(a.memory||0);
+        r.tr.className = agents[aid].online?"online":"offline";
+        r.tr.children[1].innerText = escapeHtml(a.public_ip||'');
+        r.tr.children[2].innerText = escapeHtml(a.lan_ip||'');
+
+        r.cpuDiv.style.width = (a.cpu||0)+"%";
+        r.cpuDiv.innerText = Math.round(a.cpu||0)+"%";
+        r.cpuDiv.className = "inner "+usageClass(a.cpu||0);
+
+        r.memDiv.style.width = (a.memory||0)+"%";
+        r.memDiv.innerText = Math.round(a.memory||0)+"%";
+        r.memDiv.className = "inner "+usageClass(a.memory||0);
 
         const netCell = r.netCell;
         if(!netCell.dataset.show) netCell.dataset.show="real"; 
@@ -217,43 +219,27 @@ function updateUI(msg){
         const down = a.net?.down_speed||0;
         const totalSent = a.net?.bytes_sent||0;
         const totalRecv = a.net?.bytes_recv||0;
-
-        if(netCell.dataset.show==="real"){
-            netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
-        } else {
-            netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
-        }
-        netCell.onclick = ()=>{
-            if(netCell.dataset.show==="real"){
-                netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
-                netCell.dataset.show="total";
-            } else {
-                netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
-                netCell.dataset.show="real";
-            }
-        };
+        netCell.innerText = netCell.dataset.show==="real" ? formatBytes(up)+"/"+formatBytes(down) : formatBytes(totalSent)+"/"+formatBytes(totalRecv);
+        netCell.onclick = ()=>{ netCell.dataset.show = netCell.dataset.show==="real"?"total":"real"; updateUI({agents:[a]}); };
 
         r.tr.children[6].innerText = formatUptime(a.uptime);
-        r.tr.children[7].innerText = a.online?"在线":"离线";
+        r.tr.children[7].innerText = agents[aid].online?"在线":"离线";
 
-        // 更新磁盘信息
-        const diskTbody = r.diskTable.querySelector("tbody");
-        diskTbody.innerHTML="";
+        const diskTbody = r.diskTable.querySelector("tbody"); diskTbody.innerHTML="";
         (a.disk||[]).forEach(d=>{
             const trd = document.createElement("tr");
             trd.innerHTML=`<td>${escapeHtml(d.mount)}</td><td>${formatBytes(d.total)}</td><td>${formatBytes(d.used)}</td><td>${d.percent}%</td>`;
             diskTbody.appendChild(trd);
         });
 
-        // 更新前五进程信息
-        const procTbody = r.procTable.querySelector("tbody");
-        procTbody.innerHTML="";
+        const procTbody = r.procTable.querySelector("tbody"); procTbody.innerHTML="";
         (a.processes||[]).forEach(p=>{
             const trp = document.createElement("tr");
             trp.innerHTML=`<td>${escapeHtml(p.name)}</td><td>${p.pid}</td><td>${p.cpu_percent.toFixed(1)}</td><td>${p.memory_percent.toFixed(1)}</td>`;
             procTbody.appendChild(trp);
         });
     });
+    updateStats();
 }
 
 // ---------------- 操作 ----------------
@@ -261,8 +247,13 @@ function deleteAgent(aid){
     if(!confirm("确定要删除 agent "+aid+" 吗？")) return;
     ws_ui.send(JSON.stringify({type:"remove", agent_id:aid, auth:AUTH}));
     const r = agentRows[aid];
-    if(r){ r.tr.remove(); r.exp.remove(); delete agentRows[aid]; delete agents[aid]; }
-    document.getElementById("total").innerText = Object.keys(agents).length;
+    if(r){
+        if(r.tr) r.tr.remove();
+        if(r.exp) r.exp.remove();
+        delete agentRows[aid];
+        delete agents[aid];
+    }
+    updateStats();
 }
 function toggleExpand(id){
     const tr=document.getElementById(id);
