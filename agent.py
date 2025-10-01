@@ -34,7 +34,6 @@ def top_processes(n=5):
             procs.append(p.info)
         except:
             pass
-    # 按 CPU 使用率排序
     procs.sort(key=lambda x: x.get("cpu_percent", 0), reverse=True)
     return procs[:n]
 
@@ -89,6 +88,7 @@ def get_sysinfo():
         return {"type": "update", "agent_id": AGENT_ID, "error": str(e)}
 
 def exec_cmd(cmd):
+    """同步执行命令并返回结果"""
     try:
         out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=120)
         return {"cmd": cmd, "output": out.decode(errors="ignore")}
@@ -96,6 +96,21 @@ def exec_cmd(cmd):
         return {"cmd": cmd, "error": e.output.decode(errors="ignore")}
     except Exception as e:
         return {"cmd": cmd, "error": str(e)}
+
+async def run_cmd_async(ws, cmd):
+    """后台异步执行命令"""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, exec_cmd, cmd)
+    try:
+        await ws.send(json.dumps({
+            "type": "cmd_result",
+            "agent_id": AGENT_ID,
+            "payload": result
+        }))
+        # 执行完命令立即更新状态
+        await ws.send(json.dumps(get_sysinfo()))
+    except Exception as e:
+        print(f"[Agent] 发送命令结果失败: {e}")
 
 async def agent_loop():
     while True:
@@ -109,27 +124,23 @@ async def agent_loop():
                     while True:
                         info = get_sysinfo()
                         await ws.send(json.dumps(info))
-                        print(f"[Agent] 上报: host={info.get('hostname')} "
-                              f"os={info.get('os')} cpu={info.get('cpu')}% "
-                              f"mem={info.get('memory')}% "
-                              f"disk={len(info.get('disk'))}个 "
-                              f"net↑={info['net']['up_speed']:.1f}B/s ↓={info['net']['down_speed']:.1f}B/s "
-                              f"procs={len(info.get('processes', []))}")
                         await asyncio.sleep(REPORT_INTERVAL)
 
                 async def listener():
                     async for msg in ws:
-                        data = json.loads(msg)
-                        if data.get("type") == "exec":
-                            cmd = data.get("cmd")
-                            print(f"[Agent] 收到命令: {cmd}")
-                            res = await asyncio.to_thread(exec_cmd, cmd)
-                            await ws.send(json.dumps({
-                                "type": "cmd_result",
-                                "agent_id": AGENT_ID,
-                                "payload": res
-                            }))
-                            await ws.send(json.dumps(get_sysinfo()))
+                        try:
+                            data = json.loads(msg)
+                            print(f"[Agent] 收到消息: {data}")
+                            if data.get("type") == "exec":
+                                agents_list = data.get("agents", [])
+                                if AGENT_ID not in agents_list:
+                                    continue
+                                cmd = data.get("cmd")
+                                if cmd:
+                                    # 异步后台执行命令
+                                    asyncio.create_task(run_cmd_async(ws, cmd))
+                        except Exception as e:
+                            print(f"[Agent] 处理消息出错: {e}")
 
                 await asyncio.gather(reporter(), listener())
 
@@ -139,3 +150,5 @@ async def agent_loop():
 
 if __name__ == "__main__":
     asyncio.run(agent_loop())
+
+
