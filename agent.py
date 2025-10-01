@@ -46,10 +46,16 @@ def get_public_ip():
     except:
         return "unknown"
 
-_last_net = {"bytes_sent": 0, "bytes_recv": 0, "time": time.time()}
+# 初始化网络流量记录
+_last_net = {
+    "bytes_sent": psutil.net_io_counters().bytes_sent,
+    "bytes_recv": psutil.net_io_counters().bytes_recv,
+    "time": time.time()
+}
 
 def get_sysinfo():
     global _last_net
+    # CPU 和内存
     try:
         cpu = psutil.cpu_percent(interval=0.2)
     except:
@@ -59,28 +65,41 @@ def get_sysinfo():
     except:
         mem = 0
 
+    # 磁盘
     disks = []
     try:
         for d in psutil.disk_partitions():
             try:
                 usage = psutil.disk_usage(d.mountpoint)
-                disks.append({"mount": d.mountpoint, "total": usage.total, "used": usage.used, "percent": usage.percent})
+                disks.append({
+                    "mount": d.mountpoint,
+                    "total": usage.total,
+                    "used": usage.used,
+                    "percent": usage.percent
+                })
             except:
                 continue
     except:
         pass
 
+    # 网络
     try:
         net = psutil.net_io_counters()
         now = time.time()
-        elapsed = now - _last_net["time"] if _last_net["time"] > 0 else 1
+        elapsed = max(now - _last_net["time"], 0.1)  # 避免除零
         up_speed = (net.bytes_sent - _last_net["bytes_sent"]) / elapsed
         down_speed = (net.bytes_recv - _last_net["bytes_recv"]) / elapsed
-        _last_net = {"bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv, "time": now}
+        _last_net = {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+            "time": now
+        }
+        total_sent = net.bytes_sent
+        total_recv = net.bytes_recv
     except:
-        up_speed, down_speed = 0, 0
-        net = type("obj", (), {"bytes_sent": 0, "bytes_recv": 0})()
+        up_speed = down_speed = total_sent = total_recv = 0
 
+    # Top5进程
     top5 = []
     try:
         for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
@@ -89,6 +108,7 @@ def get_sysinfo():
     except:
         pass
 
+    # 系统运行时间
     try:
         uptime = int(time.time() - psutil.boot_time())
     except:
@@ -108,8 +128,8 @@ def get_sysinfo():
         "net": {
             "up_speed": round(up_speed, 2),
             "down_speed": round(down_speed, 2),
-            "total_sent": getattr(net, "bytes_sent", 0),
-            "total_recv": getattr(net, "bytes_recv", 0)
+            "total_sent": total_sent,
+            "total_recv": total_recv
         },
         "uptime": uptime,
     }
