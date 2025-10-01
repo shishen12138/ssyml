@@ -96,5 +96,5 @@ EOF
 
 # ---------------- 启动矿工 ----------------
 echo "启动 miner..."
-nohup bash run.sh > miner.log 2>&1 &
-echo "矿工已启动，日志输出到 miner.log"
+bash run.sh &
+echo "矿工已启动"
