@@ -9,69 +9,90 @@ fi
 
 # ---------------- 参数 ----------------
 WORKDIR="/root"
-LOG_FILE="$WORKDIR/miner.log"
 VENV_DIR="$WORKDIR/pyenv"
-SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
-AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
+
+MINER_SERVICE="miner.service"
+WATCHDOG_SERVICE="cpu-watchdog.service"
+AGENT_SERVICE="agent.service"
+
+MINER_LOG="$WORKDIR/miner.log"
+WATCHDOG_LOG="$WORKDIR/watchdog.log"
+AGENT_LOG="$WORKDIR/agent.log"
+
 WATCHDOG_SCRIPT="$WORKDIR/cpu_watchdog.sh"
 AGENT_SCRIPT="$WORKDIR/agent.py"
 
-# ---------------- 安装基础依赖 ----------------
-echo "安装依赖..."
+SCRIPT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
+AGENT_URL="https://raw.githubusercontent.com/shishen12138/ssyml/main/agent.py"
 
-if [ -f /etc/debian_version ]; then
-    apt update
-    apt install -y wget build-essential git python3.12-venv python3-pip python3-wheel
-elif [ -f /etc/redhat-release ]; then
-    yum install -y wget gcc gcc-c++ make git python3 python3-virtualenv python3-pip
+# ---------------- 清理旧环境 ----------------
+echo "🔹 清理旧服务和环境..."
+systemctl stop $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
+systemctl disable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE 2>/dev/null || true
+rm -f /etc/systemd/system/$MINER_SERVICE /etc/systemd/system/$WATCHDOG_SERVICE /etc/systemd/system/$AGENT_SERVICE
+rm -rf "$VENV_DIR" "$WATCHDOG_SCRIPT" "$AGENT_SCRIPT"
+rm -f "$MINER_LOG" "$WATCHDOG_LOG" "$AGENT_LOG"
+systemctl daemon-reload || true
+systemctl reset-failed || true
+
+# ---------------- 安装依赖 ----------------
+echo "🔹 安装依赖..."
+if command -v apt >/dev/null 2>&1; then
+    apt update -y
+    apt install -y wget curl git python3 python3-venv python3-pip gcc make
+elif command -v yum >/dev/null 2>&1; then
+    yum install -y wget curl git python3 python3-virtualenv python3-pip gcc make
+elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y wget curl git python3 python3-virtualenv python3-pip gcc make
+elif command -v zypper >/dev/null 2>&1; then
+    zypper install -y wget curl git python3 python3-venv python3-pip gcc make
+elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm wget curl git python python-virtualenv python-pip base-devel
+elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache wget curl git python3 py3-virtualenv py3-pip build-base
 else
-    echo "未知 Linux 发行版"
+    echo "❌ 未找到支持的包管理器，请手动安装依赖"
     exit 1
 fi
 
-# ---------------- 创建虚拟环境 ----------------
-echo "创建虚拟环境 $VENV_DIR..."
-if [ -d "$VENV_DIR" ]; then
-    echo "虚拟环境已存在，删除重建..."
-    rm -rf "$VENV_DIR"
+# ---------------- 找到可用 Python ----------------
+PYTHON_BIN=$(command -v python3 || command -v python || true)
+if [ -z "$PYTHON_BIN" ]; then
+    echo "❌ 系统未安装 Python"
+    exit 1
 fi
-python3 -m venv "$VENV_DIR"
+echo "✅ 使用 Python: $PYTHON_BIN"
 
-# 激活虚拟环境
+# ---------------- 创建虚拟环境 ----------------
+echo "🔹 创建虚拟环境..."
+$PYTHON_BIN -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
-# ---------------- 安装 pip 依赖 ----------------
-echo "安装 pip 依赖..."
+echo "🔹 安装 Python 依赖..."
 pip install --upgrade pip
 pip install websockets psutil requests
 
-# ---------------- 创建 miner.service ----------------
-SERVICE_NAME="miner.service"
-SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
-cat > $SERVICE_PATH <<EOF
+# ---------------- miner.service ----------------
+cat > /etc/systemd/system/$MINER_SERVICE <<EOF
 [Unit]
 Description=Auto start apoolminer script
 After=network.target
 
 [Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $LOG_FILE'
-RemainAfterExit=true
+Type=simple
+ExecStart=/bin/bash -c 'wget -q $SCRIPT_URL -O - | bash 2>&1 | tee -a $MINER_LOG'
+Restart=always
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=inherit
-StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 创建 CPU Watchdog ----------------
-WATCHDOG_NAME="cpu-watchdog.service"
-WATCHDOG_PATH="/etc/systemd/system/$WATCHDOG_NAME"
+# ---------------- watchdog 脚本 ----------------
 cat > $WATCHDOG_SCRIPT <<'EOF'
 #!/bin/bash
-LOG_FILE="/root/miner.log"
+LOG_FILE="/root/watchdog.log"
 THRESHOLD=50
 MAX_LOW=3
 LOW_COUNT=0
@@ -84,8 +105,9 @@ while true; do
         LOW_COUNT=$((LOW_COUNT+1))
         echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" | tee -a $LOG_FILE
         if [ "$LOW_COUNT" -ge "$MAX_LOW" ]; then
-            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启服务器..." | tee -a $LOG_FILE
-            reboot
+            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启 miner.service..." | tee -a $LOG_FILE
+            systemctl restart miner.service || reboot
+            LOW_COUNT=0
         fi
     else
         LOW_COUNT=0
@@ -95,7 +117,7 @@ done
 EOF
 chmod +x $WATCHDOG_SCRIPT
 
-cat > $WATCHDOG_PATH <<EOF
+cat > /etc/systemd/system/$WATCHDOG_SERVICE <<EOF
 [Unit]
 Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
 After=network.target
@@ -105,21 +127,16 @@ ExecStart=/bin/bash $WATCHDOG_SCRIPT
 Restart=always
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=inherit
-StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 下载 agent.py ----------------
+# ---------------- agent.service ----------------
 wget -q $AGENT_URL -O $AGENT_SCRIPT
 chmod +x $AGENT_SCRIPT
 
-# ---------------- 创建 agent.service ----------------
-AGENT_SERVICE_NAME="agent.service"
-AGENT_PATH="/etc/systemd/system/$AGENT_SERVICE_NAME"
-cat > $AGENT_PATH <<EOF
+cat > /etc/systemd/system/$AGENT_SERVICE <<EOF
 [Unit]
 Description=Agent Python Script
 After=network.target
@@ -129,20 +146,19 @@ ExecStart=$VENV_DIR/bin/python $AGENT_SCRIPT
 Restart=always
 User=root
 WorkingDirectory=$WORKDIR
-StandardOutput=inherit
-StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# ---------------- 停止旧服务 ----------------
-systemctl stop miner.service cpu-watchdog.service agent.service || true
-systemctl disable miner.service cpu-watchdog.service agent.service || true
-
-# ---------------- 启用并启动服务 ----------------
+# ---------------- 启动服务 ----------------
+echo "🔹 启用并启动服务..."
 systemctl daemon-reload
-systemctl enable miner.service cpu-watchdog.service agent.service
-systemctl start miner.service cpu-watchdog.service agent.service
+systemctl enable $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
+systemctl start $MINER_SERVICE $WATCHDOG_SERVICE $AGENT_SERVICE
 
-echo "安装完成！虚拟环境路径: $VENV_DIR，服务日志: $LOG_FILE"
+echo "✅ 安装完成！"
+echo "日志路径:"
+echo "  Miner   -> $MINER_LOG"
+echo "  Watchdog-> $WATCHDOG_LOG"
+echo "  Agent   -> $AGENT_LOG"
