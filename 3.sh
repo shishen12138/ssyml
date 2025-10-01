@@ -59,8 +59,10 @@ pip install websockets psutil requests
 
 # ---------------- 下载 agent.py ----------------
 echo "🔹 下载 agent.py..."
-wget -q -O "$WORKDIR/agent.py" "$AGENT_URL"
-chmod +x "$WORKDIR/agent.py"
+if [ ! -f "$WORKDIR/agent.py" ]; then
+    wget -q -O "$WORKDIR/agent.py" "$AGENT_URL"
+    chmod +x "$WORKDIR/agent.py"
+fi
 
 # ---------------- 创建 agent.service ----------------
 cat > /etc/systemd/system/$AGENT_SERVICE <<EOF
@@ -90,6 +92,9 @@ SCRIPT="/root/1.sh"
 LOG_FILE="/root/watchdog.log"
 LOCK_FILE="/root/watchdog.lock"
 MINER_NAME="apoolminer_linux_qubic_autoupdate"
+CHECK_INTERVAL=30
+RETRY_THRESHOLD=6
+MINER_MISSING_COUNT=0
 
 # 防止多实例运行
 exec 200>"$LOCK_FILE"
@@ -99,10 +104,6 @@ flock -n 200 || {
 }
 
 run_latest_script() {
-    if pgrep -f "$MINER_NAME" > /dev/null; then
-        echo "$(date) 矿工已在运行，跳过执行 1.sh" | tee -a "$LOG_FILE"
-        return
-    fi
     echo "$(date) ⚡ 执行 1.sh" | tee -a "$LOG_FILE"
     wget -q -O "$SCRIPT" "https://raw.githubusercontent.com/shishen12138/ssyml/main/1.sh"
     chmod +x "$SCRIPT"
@@ -110,15 +111,23 @@ run_latest_script() {
 }
 
 # 启动时执行一次
-run_latest_script
+if ! pgrep -f "$MINER_NAME" > /dev/null; then
+    run_latest_script
+fi
 
 # 守护循环
 while true; do
     if ! pgrep -f "$MINER_NAME" > /dev/null; then
-        echo "$(date) 矿工未运行，重新执行 1.sh" | tee -a "$LOG_FILE"
-        run_latest_script
+        MINER_MISSING_COUNT=$((MINER_MISSING_COUNT+1))
+        echo "$(date) 矿工未运行，连续次数: $MINER_MISSING_COUNT" | tee -a "$LOG_FILE"
+        if [ "$MINER_MISSING_COUNT" -ge "$RETRY_THRESHOLD" ]; then
+            run_latest_script
+            MINER_MISSING_COUNT=0
+        fi
+    else
+        MINER_MISSING_COUNT=0
     fi
-    sleep 30
+    sleep $CHECK_INTERVAL
 done
 EOF
 
@@ -132,7 +141,7 @@ After=network.target
 
 [Service]
 ExecStart=/bin/bash $WATCHDOG_SCRIPT
-Restart=always           # watchdog 异常退出自动重启
+Restart=always
 RestartSec=10
 User=root
 WorkingDirectory=$WORKDIR
