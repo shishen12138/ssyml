@@ -93,81 +93,33 @@ EOF
 cat > $WATCHDOG_SCRIPT <<'EOF'
 #!/bin/bash
 LOG_FILE="/root/watchdog.log"
-MINER_SERVICE="miner.service"
-CHECK_INTERVAL=300  # 每 5 分钟检测一次
-LOW_COUNT=0
 THRESHOLD=50
 MAX_LOW=3
-MINER_BASE="/root"
-MINER_DIR="$MINER_BASE/apoolminer_linux_qubic_autoupdate"
-UPDATE_URL="https://github.com/apool-io/apoolminer/releases/latest"
-
-echo "$(date) Watchdog 启动" | tee -a $LOG_FILE
-
-get_latest_version() {
-    curl -sL -o /dev/null -w "%{url_effective}" $UPDATE_URL | awk -F '/' '{print $NF}'
-}
-
-get_current_version() {
-    [ -f "$MINER_DIR/version.txt" ] && cat "$MINER_DIR/version.txt" || echo "none"
-}
-
-update_miner() {
-    local latest=$1
-    echo "$(date) 检测到新版本 $latest，正在更新..." | tee -a $LOG_FILE
-
-    cd "$MINER_BASE"
-    wget -q "https://github.com/apool-io/apoolminer/releases/download/$latest/apoolminer_linux_qubic_autoupdate_${latest}.tar.gz" -O miner_update.tar.gz
-    tar -xzf miner_update.tar.gz
-    rm -f miner_update.tar.gz
-
-    # 保留旧配置
-    if [ -f "$MINER_DIR/miner.conf" ]; then
-        cp "$MINER_DIR/miner.conf" "$MINER_DIR/miner.conf.bak"
-    fi
-
-    # 如果新版本没有配置，则恢复旧配置
-    if [ ! -f "$MINER_DIR/miner.conf" ] && [ -f "$MINER_DIR/miner.conf.bak" ]; then
-        cp "$MINER_DIR/miner.conf.bak" "$MINER_DIR/miner.conf"
-    fi
-
-    echo "$latest" > "$MINER_DIR/version.txt"
-    echo "$(date) 更新完成，重启 Miner 服务..." | tee -a $LOG_FILE
-    systemctl restart $MINER_SERVICE
-}
-
+LOW_COUNT=0
+echo "$(date) watchdog 启动" | tee -a $LOG_FILE
 while true; do
-    # CPU 使用率检测
     IDLE=$(top -bn2 -d 1 | grep "Cpu(s)" | tail -n1 | awk '{print $8}' | cut -d. -f1)
     USAGE=$((100 - IDLE))
     echo "$(date) CPU 使用率: $USAGE%" | tee -a $LOG_FILE
-
     if [ "$USAGE" -lt "$THRESHOLD" ]; then
         LOW_COUNT=$((LOW_COUNT+1))
+        echo "$(date) CPU < $THRESHOLD%，连续低使用次数: $LOW_COUNT" | tee -a $LOG_FILE
         if [ "$LOW_COUNT" -ge "$MAX_LOW" ]; then
-            echo "$(date) CPU 连续低负载，重启 Miner 服务..." | tee -a $LOG_FILE
-            systemctl restart $MINER_SERVICE || true
+            echo "$(date) CPU 连续低于 $THRESHOLD% $MAX_LOW 次，重启 miner.service..." | tee -a $LOG_FILE
+            systemctl restart miner.service || reboot
             LOW_COUNT=0
         fi
     else
         LOW_COUNT=0
     fi
-
-    # 自动更新检测
-    LATEST_VER=$(get_latest_version)
-    CURRENT_VER=$(get_current_version)
-    if [ "$LATEST_VER" != "$CURRENT_VER" ]; then
-        update_miner "$LATEST_VER"
-    fi
-
-    sleep $CHECK_INTERVAL
+    sleep 30
 done
 EOF
 chmod +x $WATCHDOG_SCRIPT
 
 cat > /etc/systemd/system/$WATCHDOG_SERVICE <<EOF
 [Unit]
-Description=CPU Watchdog & Auto-update Miner
+Description=CPU watchdog (reboot if CPU usage < 50% for 3 consecutive checks)
 After=network.target
 
 [Service]
