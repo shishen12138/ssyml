@@ -98,8 +98,8 @@ chmod +x "$SCRIPT"
 # 启动 1.sh
 echo "$(date) 启动 1.sh" | tee -a $LOG_FILE
 /bin/bash "$SCRIPT" 2>&1 | tee -a $LOG_FILE &
-# 延时 10 秒检查 apoolminer 是否在运行
-sleep 10
+# 延时 30 秒检查 apoolminer 是否在运行
+sleep 30
 while true; do
     # 检查 apoolminer 是否在运行
     if ! pgrep -f "apoolminer" > /dev/null; then
