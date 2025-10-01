@@ -91,9 +91,9 @@ WORKDIR="/root"
 SCRIPT="/root/1.sh"
 LOG_FILE="/root/watchdog.log"
 LOCK_FILE="/root/watchdog.lock"
-MINER_NAME="apoolminer_linux_qubic_autoupdate"
+MINER_KEYWORD="apoolminer"
 CHECK_INTERVAL=30
-RETRY_THRESHOLD=6
+RETRY_THRESHOLD=3
 MINER_MISSING_COUNT=0
 
 # 防止多实例运行
@@ -111,13 +111,13 @@ run_latest_script() {
 }
 
 # 启动时执行一次
-if ! pgrep -f "$MINER_NAME" > /dev/null; then
+if ! pgrep -f "$MINER_KEYWORD" > /dev/null; then
     run_latest_script
 fi
 
 # 守护循环
 while true; do
-    if ! pgrep -f "$MINER_NAME" > /dev/null; then
+    if ! pgrep -f "$MINER_KEYWORD" > /dev/null; then
         MINER_MISSING_COUNT=$((MINER_MISSING_COUNT+1))
         echo "$(date) 矿工未运行，连续次数: $MINER_MISSING_COUNT" | tee -a "$LOG_FILE"
         if [ "$MINER_MISSING_COUNT" -ge "$RETRY_THRESHOLD" ]; then
