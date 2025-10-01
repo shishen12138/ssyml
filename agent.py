@@ -98,7 +98,7 @@ def get_sysinfo():
 # 命令执行
 def exec_cmd(cmd):
     try:
-        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=120)
+        r=subprocess.run(cmd,shell=True,capture_output=True,text=True,timeout=30)
         return {"stdout":r.stdout,"stderr":r.stderr,"returncode":r.returncode}
     except Exception as e:
         return {"stdout":"","stderr":str(e),"returncode":-1}
@@ -108,15 +108,17 @@ async def run_agent():
     retry_delay=1
     while True:
         try:
-            async with websockets.connect(SERVER,ping_interval=15,ping_timeout=15,close_timeout=5) as ws:
+            async with websockets.connect(SERVER,ping_interval=30,ping_timeout=30,close_timeout=5) as ws:
                 retry_delay=1
                 await ws.send(json.dumps({"type":"register","agent_id":AGENT_ID}))
                 log(f"[agent] 已连接 server {SERVER}，ID={AGENT_ID}")
 
                 async def reporter():
                     while True:
-                        try: await ws.send(json.dumps(get_sysinfo()))
-                        except Exception as e: log(f"[agent] 上报失败: {e}")
+                        try:
+                            await ws.send(json.dumps(get_sysinfo()))
+                        except Exception as e: 
+                            log(f"[agent] 上报失败: {e}")
                         await asyncio.sleep(REPORT_INTERVAL)
 
                 async def listener():
@@ -126,11 +128,16 @@ async def run_agent():
                             if data.get("type")=="exec":
                                 cmd=data.get("cmd")
                                 log(f"[agent] 执行命令: {cmd}")
-                                res=exec_cmd(cmd)
+                                # 异步执行命令，避免阻塞事件循环
+                                res = await asyncio.to_thread(exec_cmd, cmd)
                                 await ws.send(json.dumps({"type":"cmd_result","agent_id":AGENT_ID,"payload":res}))
-                        except Exception as e: log(f"[agent] 处理命令异常: {e}")
+                                # 执行完命令后立即上报一次系统状态
+                                await ws.send(json.dumps(get_sysinfo()))
+                        except Exception as e: 
+                            log(f"[agent] 处理命令异常: {e}")
 
-                await asyncio.gather(reporter(),listener(),return_exceptions=True)
+                await asyncio.gather(reporter(), listener(), return_exceptions=True)
+
         except Exception as e:
             log(f"[agent] 连接失败或异常，重试中... {e}")
             await asyncio.sleep(retry_delay)
