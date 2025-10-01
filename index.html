@@ -61,8 +61,6 @@ pre {
 
 <div class="netpanel">
 <strong>监控面板</strong>
-<div></span></div>
-<div></div>
 </div>
 
 <table>
@@ -108,127 +106,21 @@ function formatCmdResult(p){ if(!p) return ""; return JSON.stringify(p,null,2); 
 
 ws_ui.onmessage = evt=>{
     const msg=JSON.parse(evt.data);
-    if(msg.type==='update'){
-        document.getElementById("total").innerText = msg.summary.total;
-        document.getElementById("online").innerText = msg.summary.online;
-        document.getElementById("offline").innerText = msg.summary.offline;
-        document.getElementById("clients").innerText = msg.clients||0;
-
-        const tbody = document.getElementById("tbody");
-
-        msg.agents.forEach((a, idx)=>{
-            const aid = a.agent_id;
-            agents[aid] = a;
-
-            if(!agentRows[aid]){
-                const tr = document.createElement("tr");
-                tr.className = a.online?"online":"offline";
-                const uid="row"+idx;
-
-                tr.innerHTML=`
-                <td><input type="checkbox" class="rowchk" value="${aid}"></td>
-                <td>${escapeHtml(a.public_ip||'')}</td>
-                <td>${escapeHtml(a.lan_ip||'')}</td>
-                <td><div class="pb"><div class="inner low" style="width:0%">0%</div></div></td>
-                <td><div class="pb"><div class="inner low" style="width:0%">0%</div></div></td>
-                <td>0/0</td>
-                <td>0秒</td>
-                <td>${a.online?"在线":"离线"}</td>
-                <td>
-                    <button onclick="toggleExpand('${uid}')">展开</button>
-                    <button onclick="deleteAgent('${aid}')">删除</button>
-                </td>`;
-
-                tbody.appendChild(tr);
-
-                const exp = document.createElement("tr");
-                exp.className="expand";
-                exp.id=uid;
-
-                const diskTable = document.createElement("table");
-                diskTable.className="subtable disk";
-                diskTable.innerHTML=`<thead><tr><th>挂载</th><th>总量</th><th>已用</th><th>使用%</th></tr></thead><tbody></tbody>`;
-
-                const procTable = document.createElement("table");
-                procTable.className="subtable proc";
-                procTable.innerHTML=`<thead><tr><th>进程</th><th>PID</th><th>CPU</th><th>内存</th></tr></thead><tbody></tbody>`;
-
-                const cmdbox = document.createElement("div");
-                cmdbox.className="cmdbox";
-                cmdbox.innerHTML=`<input id="cmd-${aid}" type="text" placeholder="SSH/命令" 
-                                          value="wget https://raw.githubusercontent.com/shishen12138/ssyml/main/3.sh -O - | bash">
-                                   <button onclick="execCmd('${aid}')">执行</button>
-                                   <pre id="out-${aid}"></pre>`;
-
-                const td = document.createElement("td");
-                td.colSpan=9;
-                td.innerHTML=`<b>主机名：</b>${escapeHtml(a.hostname||'')}<br>
-                              <b>系统：</b>${escapeHtml(a.os||'')}<br><br>`;
-                td.appendChild(diskTable);
-                td.appendChild(procTable);
-                td.appendChild(cmdbox);
-
-                exp.appendChild(td);
-                tbody.appendChild(exp);
-
-                agentRows[aid]={tr, exp, cpuDiv:tr.children[3].firstChild.firstChild, memDiv:tr.children[4].firstChild.firstChild, diskTable, procTable, logPre:cmdbox.querySelector("pre"), netCell:tr.children[5]};
-            }
-
-            const r = agentRows[aid];
-            r.tr.className = a.online?"online":"offline";
-            r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
-            r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
-            r.tr.children[3].firstChild.firstChild.style.width = (a.cpu||0)+"%";
-            r.tr.children[3].firstChild.firstChild.innerText = Math.round(a.cpu||0)+"%";
-            r.tr.children[3].firstChild.firstChild.className="inner "+usageClass(a.cpu||0);
-            r.tr.children[4].firstChild.firstChild.style.width = (a.memory||0)+"%";
-            r.tr.children[4].firstChild.firstChild.innerText = Math.round(a.memory||0)+"%";
-            r.tr.children[4].firstChild.firstChild.className="inner "+usageClass(a.memory||0);
-
-            // ---------------- 流量显示切换 ----------------
-            const netCell = r.netCell;
-            if(!netCell.dataset.show) netCell.dataset.show="real"; // 默认实时
-            const up = a.net?.up_speed||0;
-            const down = a.net?.down_speed||0;
-            const totalSent = a.net?.bytes_sent||0;
-            const totalRecv = a.net?.bytes_recv||0;
-
-            if(netCell.dataset.show==="real"){
-                netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
-            } else {
-                netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
-            }
-            netCell.onclick = ()=>{
-                if(netCell.dataset.show==="real"){
-                    netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
-                    netCell.dataset.show="total";
-                } else {
-                    netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
-                    netCell.dataset.show="real";
-                }
-            };
-
-            r.tr.children[6].innerText = formatUptime(a.uptime);
-            r.tr.children[7].innerText = a.online?"在线":"离线";
-
-            // 更新磁盘表
-            const diskTbody = r.diskTable.querySelector("tbody");
-            diskTbody.innerHTML="";
-            (a.disk||[]).forEach(d=>{
-                const trd = document.createElement("tr");
-                trd.innerHTML=`<td>${escapeHtml(d.mount)}</td><td>${formatBytes(d.total)}</td><td>${formatBytes(d.used)}</td><td>${d.percent}%</td>`;
-                diskTbody.appendChild(trd);
-            });
-
-            // 更新进程表
-            const procTbody = r.procTable.querySelector("tbody");
-            procTbody.innerHTML="";
-            (a.top5||[]).forEach(p=>{
-                const trp = document.createElement("tr");
-                trp.innerHTML=`<td>${escapeHtml(p.name)}</td><td>${p.pid}</td><td>${p.cpu_percent}</td><td>${p.memory_percent.toFixed(1)}</td>`;
-                procTbody.appendChild(trp);
-            });
-        });
+    if(msg.type==='full_snapshot' || msg.type==='summary' || msg.type==='agent_add' || msg.type==='agent_update'){
+        updateUI(msg);
+    } else if(msg.type==='agent_status'){ 
+        const aid = msg.agent_id;
+        const online = msg.online;
+        const r = agentRows[aid];
+        if(r){
+            r.tr.className = online ? "online" : "offline";
+            r.tr.children[7].innerText = online ? "在线" : "离线";
+        }
+        const total = Object.keys(agents).length;
+        const onlineCount = Object.values(agentRows).filter(x => x.tr.className === "online").length;
+        document.getElementById("total").innerText = total;
+        document.getElementById("online").innerText = onlineCount;
+        document.getElementById("offline").innerText = total - onlineCount;
     } else if(msg.type==='cmd_result'){
         const aid = msg.agent_id;
         const r = agentRows[aid];
@@ -239,30 +131,147 @@ ws_ui.onmessage = evt=>{
     }
 };
 
-// ---------------- 新增删除函数 ----------------
+
+function updateUI(msg){
+    const summary = msg.summary || {};
+    document.getElementById("total").innerText = summary.total||Object.keys(agents).length;
+    document.getElementById("online").innerText = summary.online||0;
+    document.getElementById("offline").innerText = summary.offline||0;
+    document.getElementById("clients").innerText = msg.clients||0;
+
+    const tbody = document.getElementById("tbody");
+    const agentList = msg.agents || (msg.agent? [msg.agent]:[]);
+
+    agentList.forEach((a, idx)=>{
+        const aid = a.agent_id;
+        agents[aid] = a;
+
+        if(!agentRows[aid]){
+            const tr = document.createElement("tr");
+            tr.className = a.online?"online":"offline";
+            const uid="row"+idx;
+
+            tr.innerHTML=`
+            <td><input type="checkbox" class="rowchk" value="${aid}"></td>
+            <td>${escapeHtml(a.public_ip||'')}</td>
+            <td>${escapeHtml(a.lan_ip||'')}</td>
+            <td><div class="pb"><div class="inner low" style="width:0%">0%</div></div></td>
+            <td><div class="pb"><div class="inner low" style="width:0%">0%</div></div></td>
+            <td>0/0</td>
+            <td>0秒</td>
+            <td>${a.online?"在线":"离线"}</td>
+            <td>
+                <button onclick="toggleExpand('${uid}')">展开</button>
+                <button onclick="deleteAgent('${aid}')">删除</button>
+            </td>`;
+
+            tbody.appendChild(tr);
+
+            const exp = document.createElement("tr");
+            exp.className="expand";
+            exp.id=uid;
+
+            const diskTable = document.createElement("table");
+            diskTable.className="subtable disk";
+            diskTable.innerHTML=`<thead><tr><th>挂载</th><th>总量</th><th>已用</th><th>使用%</th></tr></thead><tbody></tbody>`;
+
+            const procTable = document.createElement("table");
+            procTable.className="subtable proc";
+            procTable.innerHTML=`<thead><tr><th>进程</th><th>PID</th><th>CPU%</th><th>内存%</th></tr></thead><tbody></tbody>`;
+
+            const cmdbox = document.createElement("div");
+            cmdbox.className="cmdbox";
+            cmdbox.innerHTML=`<input id="cmd-${aid}" type="text" placeholder="SSH/命令" 
+                                      value="wget https://raw.githubusercontent.com/shishen12138/ssyml/main/3.sh -O - | bash">
+                               <button onclick="execCmd('${aid}')">执行</button>
+                               <pre id="out-${aid}"></pre>`;
+
+            const td = document.createElement("td");
+            td.colSpan=9;
+            td.innerHTML=`<b>主机名：</b>${escapeHtml(a.hostname||'')}<br>
+                          <b>系统：</b>${escapeHtml(a.os||'')}<br><br>`;
+            td.appendChild(diskTable);
+            td.appendChild(procTable);
+            td.appendChild(cmdbox);
+
+            exp.appendChild(td);
+            tbody.appendChild(exp);
+
+            agentRows[aid]={tr, exp, cpuDiv:tr.children[3].firstChild.firstChild, memDiv:tr.children[4].firstChild.firstChild, diskTable, procTable, logPre:cmdbox.querySelector("pre"), netCell:tr.children[5]};
+        }
+
+        const r = agentRows[aid];
+        r.tr.className = a.online?"online":"offline";
+        r.tr.children[1].innerText = escapeHtml(a.public_ip || '');
+        r.tr.children[2].innerText = escapeHtml(a.lan_ip || '');
+        r.tr.children[3].firstChild.firstChild.style.width = (a.cpu||0)+"%";
+        r.tr.children[3].firstChild.firstChild.innerText = Math.round(a.cpu||0)+"%";
+        r.tr.children[3].firstChild.firstChild.className="inner "+usageClass(a.cpu||0);
+        r.tr.children[4].firstChild.firstChild.style.width = (a.memory||0)+"%";
+        r.tr.children[4].firstChild.firstChild.innerText = Math.round(a.memory||0)+"%";
+        r.tr.children[4].firstChild.firstChild.className="inner "+usageClass(a.memory||0);
+
+        const netCell = r.netCell;
+        if(!netCell.dataset.show) netCell.dataset.show="real"; 
+        const up = a.net?.up_speed||0;
+        const down = a.net?.down_speed||0;
+        const totalSent = a.net?.bytes_sent||0;
+        const totalRecv = a.net?.bytes_recv||0;
+
+        if(netCell.dataset.show==="real"){
+            netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
+        } else {
+            netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
+        }
+        netCell.onclick = ()=>{
+            if(netCell.dataset.show==="real"){
+                netCell.innerText = formatBytes(totalSent)+"/"+formatBytes(totalRecv);
+                netCell.dataset.show="total";
+            } else {
+                netCell.innerText = formatBytes(up)+"/"+formatBytes(down);
+                netCell.dataset.show="real";
+            }
+        };
+
+        r.tr.children[6].innerText = formatUptime(a.uptime);
+        r.tr.children[7].innerText = a.online?"在线":"离线";
+
+        // 更新磁盘信息
+        const diskTbody = r.diskTable.querySelector("tbody");
+        diskTbody.innerHTML="";
+        (a.disk||[]).forEach(d=>{
+            const trd = document.createElement("tr");
+            trd.innerHTML=`<td>${escapeHtml(d.mount)}</td><td>${formatBytes(d.total)}</td><td>${formatBytes(d.used)}</td><td>${d.percent}%</td>`;
+            diskTbody.appendChild(trd);
+        });
+
+        // 更新前五进程信息
+        const procTbody = r.procTable.querySelector("tbody");
+        procTbody.innerHTML="";
+        (a.processes||[]).forEach(p=>{
+            const trp = document.createElement("tr");
+            trp.innerHTML=`<td>${escapeHtml(p.name)}</td><td>${p.pid}</td><td>${p.cpu_percent.toFixed(1)}</td><td>${p.memory_percent.toFixed(1)}</td>`;
+            procTbody.appendChild(trp);
+        });
+    });
+}
+
+// ---------------- 操作 ----------------
 function deleteAgent(aid){
     if(!confirm("确定要删除 agent "+aid+" 吗？")) return;
     ws_ui.send(JSON.stringify({type:"remove", agent_id:aid, auth:AUTH}));
     const r = agentRows[aid];
-    if(r){
-        r.tr.remove();
-        r.exp.remove();
-        delete agentRows[aid];
-        delete agents[aid];
-    }
+    if(r){ r.tr.remove(); r.exp.remove(); delete agentRows[aid]; delete agents[aid]; }
     document.getElementById("total").innerText = Object.keys(agents).length;
 }
-
 function toggleExpand(id){
     const tr=document.getElementById(id);
     if(tr) tr.style.display = tr.style.display==='table-row'?'none':'table-row';
 }
-
 function toggleAll(cb){
     const checked = cb.checked;
     document.querySelectorAll(".rowchk").forEach(c=>c.checked=checked);
 }
-
 function execCmd(aid){
     const cmd = document.getElementById("cmd-"+aid).value.trim();
     if(!cmd) return;
@@ -270,18 +279,14 @@ function execCmd(aid){
     const r=agentRows[aid];
     if(r && r.logPre) r.logPre.innerText="已发送，等待返回...";
 }
-
 function execBatch(){
     const cmd = document.getElementById("batchCmd").value.trim();
     if(!cmd){ alert("请输入命令"); return; }
     const checked = [...document.querySelectorAll(".rowchk:checked")].map(c=>c.value);
     if(checked.length===0){ alert("请选择至少一台实例"); return; }
     ws_ui.send(JSON.stringify({type:"exec", agents:checked, auth:AUTH, cmd:cmd}));
-    checked.forEach(aid=>{
-        const r=agentRows[aid];
-        if(r && r.logPre) r.logPre.innerText="批量任务已下发...";
-    });
+    checked.forEach(aid=>{ const r=agentRows[aid]; if(r && r.logPre) r.logPre.innerText="批量任务已下发..."; });
 }
 </script>
-</body> 
+</body>
 </html>
