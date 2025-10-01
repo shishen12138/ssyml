@@ -7,7 +7,7 @@ MINER_VERSION="v3.3.0"
 MINER_DIR="apoolminer_linux_qubic_autoupdate_${MINER_VERSION}"
 ACCOUNT="CP_qcy"
 DOWNLOAD_URL="https://github.com/apool-io/apoolminer/releases/download/$MINER_VERSION/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
-TAR_FILE="apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
+TAR_FILE="$BASE_DIR/apoolminer_linux_qubic_autoupdate_${MINER_VERSION}.tar.gz"
 
 cd "$BASE_DIR"
 
@@ -23,17 +23,11 @@ echo "没有 apoolminer 进程，继续执行脚本..."
 # ---------------- 清理旧版本 ----------------
 echo "清理旧版本文件..."
 for dir in apoolminer_linux_qubic_autoupdate*; do
-    if [ -d "$BASE_DIR/$dir" ]; then
-        rm -rf "$BASE_DIR/$dir"
-        echo "已删除文件夹: $dir"
-    fi
+    [ -d "$dir" ] && rm -rf "$dir" && echo "已删除文件夹: $dir"
 done
 
-for zip in "$BASE_DIR"/apoolminer_linux_qubic_autoupdate*.tar.gz*; do
-    if [ -f "$zip" ]; then
-        rm -f "$zip"
-        echo "已删除压缩包: $zip"
-    fi
+for zip in apoolminer_linux_qubic_autoupdate*.tar.gz*; do
+    [ -f "$zip" ] && rm -f "$zip" && echo "已删除压缩包: $zip"
 done
 echo "清理完成 ✅"
 
@@ -52,8 +46,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "压缩包验证通过，开始解压..."
             tar -xz -f "$TAR_FILE"
             echo "下载并解压完成"
-            echo "等待 5 秒让解压文件就绪..."
-            sleep 5
+            sleep 2
             break
         else
             echo "压缩包损坏，重新下载..."
@@ -63,7 +56,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         echo "下载失败，正在重试... (尝试次数：$RETRY_COUNT)"
         rm -f "$TAR_FILE"
     fi
-    
+
     RETRY_COUNT=$((RETRY_COUNT + 1))
     sleep 5
 done
@@ -78,11 +71,10 @@ cd "$MINER_DIR"
 # ---------------- 修改权限 & 配置 ----------------
 echo "修改权限..."
 chmod -R 777 .
-sleep 2
+sleep 1
 
 echo "更新 miner.conf 设置..."
-CONF_FILE="miner.conf"
-cat > "$CONF_FILE" <<EOF
+cat > "miner.conf" <<EOF
 algo=qubic_xmr
 account=$ACCOUNT
 pool=qubic.asia.apool.io:4334
@@ -100,7 +92,4 @@ gpu-off = true
 xmr-gpu-off = true
 EOF
 
-# ---------------- 启动矿工 ----------------
-echo "启动 miner..."
-bash run.sh
-echo "矿工已启动"
+echo "✅ 更新完成！请使用 systemd 或手动启动 run.sh 来运行矿工。"
