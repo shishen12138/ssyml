@@ -90,7 +90,7 @@ def get_sysinfo():
 
 def exec_cmd(cmd):
     try:
-        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=60)
+        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=120)
         return {"cmd": cmd, "output": out.decode(errors="ignore")}
     except subprocess.CalledProcessError as e:
         return {"cmd": cmd, "error": e.output.decode(errors="ignore")}
