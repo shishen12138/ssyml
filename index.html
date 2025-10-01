@@ -239,6 +239,7 @@ ws_ui.onmessage = evt=>{
     }
 };
 
+// ---------------- 新增删除函数 ----------------
 function deleteAgent(aid){
     if(!confirm("确定要删除 agent "+aid+" 吗？")) return;
     ws_ui.send(JSON.stringify({type:"remove", agent_id:aid, auth:AUTH}));
@@ -282,5 +283,5 @@ function execBatch(){
     });
 }
 </script>
-</body>
+</body> 
 </html>
