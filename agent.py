@@ -97,17 +97,14 @@ def exec_cmd_detached(cmd: str):
     system = platform.system()
     try:
         if system == "Windows":
-            # Windows 用 start /b
             subprocess.Popen(f'start /b cmd /c "{cmd} > {log_file} 2>&1"', shell=True)
         else:
-            # Linux/macOS 用 nohup
-            subprocess.Popen(f'nohup {cmd} > {log_file} 2>&1 &', shell=True)
+            subprocess.Popen(f'nohup {cmd} > {log_file} 2>&1 &', shell=True, preexec_fn=os.setsid)
         return {"cmd": cmd, "status":"started", "log_file":log_file}
     except Exception as e:
         return {"cmd": cmd, "status":"fail", "error": str(e)}
 
 async def send_cmd_result(ws, result: dict):
-    """发送命令执行结果"""
     try:
         await ws.send(json.dumps({
             "type":"cmd_result",
@@ -124,7 +121,6 @@ async def run_cmd_async(ws, cmd):
 
 # ---------------- 重启后上报未发送日志 ----------------
 async def report_pending_logs(ws):
-    """扫描 CMD_LOG_DIR，把未发送日志逐条发送"""
     logs = sorted(glob.glob(os.path.join(CMD_LOG_DIR, "*.log")))
     for log_file in logs:
         try:
@@ -137,7 +133,6 @@ async def report_pending_logs(ws):
                 "output": content
             }
             await send_cmd_result(ws, result)
-            # 删除日志文件
             os.remove(log_file)
         except Exception as e:
             print(f"[Agent] 发送日志失败 {log_file}: {e}")
@@ -150,7 +145,6 @@ async def agent_loop():
                 print(f"[Agent] 已连接控制端 {SERVER}")
                 await ws.send(json.dumps({"type":"register","agent_id":AGENT_ID}))
 
-                # 启动状态上报
                 async def reporter():
                     while True:
                         try:
@@ -160,7 +154,6 @@ async def agent_loop():
                             print(f"[Agent] 状态上报失败: {e}")
                         await asyncio.sleep(REPORT_INTERVAL)
 
-                # 启动监听命令
                 async def listener():
                     async for msg in ws:
                         try:
@@ -175,7 +168,7 @@ async def agent_loop():
                         except Exception as e:
                             print(f"[Agent] 处理消息出错: {e}")
 
-                # 重启后先上报未发送的日志
+                # 重启后上报未发送的日志
                 await report_pending_logs(ws)
 
                 await asyncio.gather(reporter(), listener())
