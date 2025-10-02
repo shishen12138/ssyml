@@ -99,7 +99,7 @@ def exec_cmd_detached(cmd: str):
         if system == "Windows":
             subprocess.Popen(f'start /b cmd /c "{cmd} > {log_file} 2>&1"', shell=True)
         else:
-            # Linux/macOS
+            # Linux/macOS: 不加 &，直接让 nohup + Popen 脱离父进程
             full_cmd = f"bash -c '{cmd}'"
             subprocess.Popen(f'nohup {full_cmd} > {log_file} 2>&1', shell=True, preexec_fn=os.setsid)
         return {"cmd": cmd, "status":"started", "log_file":log_file}
