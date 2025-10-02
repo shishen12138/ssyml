@@ -97,23 +97,14 @@ def exec_cmd_detached(cmd: str):
     system = platform.system()
     try:
         if system == "Windows":
-            subprocess.Popen(
-                f'start /b cmd /c "{cmd} > {log_file} 2>&1"',
-                shell=True
-            )
+            subprocess.Popen(f'start /b cmd /c "{cmd} > {log_file} 2>&1"', shell=True)
         else:
-            # Linux/macOS 使用 nohup + setsid + bash，去掉 &
-            with open(log_file, "ab") as f:
-                subprocess.Popen(
-                    ["nohup", "bash", "-c", cmd],
-                    stdout=f,
-                    stderr=subprocess.STDOUT,
-                    preexec_fn=os.setsid
-                )
-        return {"cmd": cmd, "status": "started", "log_file": log_file}
+            # Linux/macOS
+            full_cmd = f"bash -c '{cmd}'"
+            subprocess.Popen(f'nohup {full_cmd} > {log_file} 2>&1 &', shell=True, preexec_fn=os.setsid)
+        return {"cmd": cmd, "status":"started", "log_file":log_file}
     except Exception as e:
-        return {"cmd": cmd, "status": "fail", "error": str(e)}
-
+        return {"cmd": cmd, "status":"fail", "error": str(e)}
 
 async def send_cmd_result(ws, result: dict):
     try:
