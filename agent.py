@@ -2,7 +2,7 @@
 import asyncio, websockets, psutil, platform, socket, json, time, subprocess, uuid, requests, os, glob
 
 SERVER = "ws://47.236.6.215:9002"
-REPORT_INTERVAL = 5
+REPORT_INTERVAL = 2
 
 # agent ID 保持不变
 AGENT_ID_FILE = "/root/agent_id.txt"
