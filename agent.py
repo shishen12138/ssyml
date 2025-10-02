@@ -91,20 +91,18 @@ def get_sysinfo():
         return {"type":"update","agent_id":AGENT_ID,"error":str(e)}
 
 # ---------------- 命令执行 ----------------
+# ---------------- 命令执行 ----------------
 def exec_cmd_detached(cmd: str):
-    """脱离 Agent 执行命令，日志写入文件"""
+    """脱离 Agent 执行命令，即便 Agent 被清理也能执行，日志写入文件"""
     log_file = os.path.join(CMD_LOG_DIR, f"{int(time.time())}_{uuid.uuid4().hex}.log")
-    system = platform.system()
     try:
-        if system == "Windows":
-            subprocess.Popen(f'start /b cmd /c "{cmd} > {log_file} 2>&1"', shell=True)
-        else:
-            # Linux/macOS: 不加 &，直接让 nohup + Popen 脱离父进程
-            full_cmd = f"bash -c '{cmd}'"
-            subprocess.Popen(f'nohup {full_cmd} > {log_file} 2>&1', shell=True, preexec_fn=os.setsid)
-        return {"cmd": cmd, "status":"started", "log_file":log_file}
+        # 构造脱离命令：nohup + bash -c + at now
+        detached_cmd = f'nohup bash -c "{cmd}" > {log_file} 2>&1'
+        # 使用 at 调度立即执行，保证完全独立
+        subprocess.Popen(f'echo "{detached_cmd}" | at now', shell=True)
+        return {"cmd": cmd, "status": "started", "log_file": log_file}
     except Exception as e:
-        return {"cmd": cmd, "status":"fail", "error": str(e)}
+        return {"cmd": cmd, "status": "fail", "error": str(e)}
 
 async def send_cmd_result(ws, result: dict):
     try:
