@@ -6,7 +6,7 @@ from threading import Thread
 
 # ---------------- 配置 ----------------
 UI_PORT, AGENT_PORT, HTTP_PORT = 8000, 9002, 8080
-HEARTBEAT_TIMEOUT = 30
+HEARTBEAT_TIMEOUT = 60  # 超过60秒未上报则认为离线
 AUTH_TOKEN = "super-secret-token-CHANGE_ME"
 
 # ---------------- 全局变量 ----------------
@@ -16,148 +16,181 @@ agents_lock = asyncio.Lock()
 
 # ---------------- 工具函数 ----------------
 def agent_info(aid, v, now=None):
+    """返回 Agent 信息，包括在线状态"""
     now = now or time.time()
-    # 只要 last 更新时间在 HEARTBEAT_TIMEOUT 内，就认为在线
-    online = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
+    online = (now - v.get("last", 0) < HEARTBEAT_TIMEOUT)
     info = v.get("info", {}).copy() if v.get("info") else {}
     info.update({"agent_id": aid, "online": online})
     return info
 
 async def broadcast_ui(data):
+    """向所有 UI 客户端广播消息"""
     msg = json.dumps(data)
-    for u in list(ui_clients):
-        try: await u.send(msg)
-        except: ui_clients.discard(u)
+    to_remove = []
+    for u in ui_clients:
+        try:
+            await u.send(msg)
+        except:
+            to_remove.append(u)
+    for u in to_remove:
+        ui_clients.discard(u)
+
+async def broadcast_ui_client_count():
+    """向所有 UI 客户端广播当前连接数"""
+    count = len(ui_clients)
+    await broadcast_ui({"type": "client_count", "count": count})
 
 # ---------------- Agent 处理 ----------------
+async def handle_agent_message(aid, data):
+    msg_type = data.get("type")
+    if msg_type == "update":
+        async with agents_lock:
+            a = agents.get(aid)
+            if a:
+                a.update({"last": time.time(), "ws": a["ws"], "info": data})
+        await broadcast_ui({"type": "agent_update", "agent": agent_info(aid, agents[aid])})
+    elif msg_type == "cmd_result":
+        payload = data.get("payload")
+        print(f"[Controller] Agent {aid} 执行命令返回: {json.dumps(payload, ensure_ascii=False)}")
+        await broadcast_ui({"type": "cmd_result", "agent_id": aid, "payload": payload})
+
 async def handle_agent(ws):
     aid = None
     print("[Controller] 新 agent 连接")
     try:
         async for msg in ws:
-            try: data = json.loads(msg)
-            except: continue
+            try:
+                data = json.loads(msg)
+            except:
+                continue
 
-            # 注册
-            if data.get("type")=="register":
+            if data.get("type") == "register":
                 aid = data.get("agent_id")
-                if not aid: continue
+                if not aid:
+                    continue
                 async with agents_lock:
                     agents[aid] = {"ws": ws, "last": time.time(), "info": {}, "online": True}
                 print(f"[Controller] Agent 注册 ID={aid}")
-                await broadcast_ui({"type":"agent_add","agent":agent_info(aid, agents[aid])})
+                await broadcast_ui({"type": "agent_add", "agent": agent_info(aid, agents[aid])})
 
-            # 状态更新
-            elif data.get("type")=="update" and aid:
-                async with agents_lock:
-                    a = agents.get(aid)
-                    if a:
-                        a.update({"last":time.time(),"online":True,"info":data})
-
-                # 打印完整上报信息
-                print(f"[Controller] Agent {aid} 上报: {json.dumps(data, ensure_ascii=False)}")
-                await broadcast_ui({"type":"agent_update","agent":agent_info(aid, agents[aid])})
-
-            # 命令返回
-            elif data.get("type")=="cmd_result" and aid:
-                print(f"[Controller] Agent {aid} 执行命令返回: {json.dumps(data.get('payload'), ensure_ascii=False)}")
-                await broadcast_ui({"type":"cmd_result","agent_id":aid,"payload":data.get("payload")})
+            elif data.get("type") in ["update", "cmd_result"] and aid:
+                await handle_agent_message(aid, data)
 
     except Exception as e:
         print(f"[Controller] Agent {aid} 异常: {e}")
     finally:
         if aid:
-            async with agents_lock:
-                a = agents.get(aid)
-                if a: a["ws"]=None
-            await broadcast_ui({"type":"agent_status","agent_id":aid,"online":False})
-            print(f"[Controller] Agent {aid} 断开")
+            print(f"[Controller] Agent {aid} WebSocket 断开")
 
 # ---------------- UI 处理 ----------------
+async def handle_exec_command(data):
+    if data.get("auth") != AUTH_TOKEN:
+        print("[Controller] 执行命令失败：认证错误")
+        return
+
+    cmd = data.get("cmd")
+    targets = data.get("agents")  # 可选
+    async with agents_lock:
+        if not targets:
+            now = time.time()
+            targets = [aid for aid, v in agents.items() if now - v.get("last",0) < HEARTBEAT_TIMEOUT]
+
+        sent_agents = []
+        for aid in targets:
+            a = agents.get(aid)
+            if a and a.get("ws"):
+                try:
+                    await a["ws"].send(json.dumps({"type": "exec", "cmd": cmd, "agents": [aid]}))
+                    sent_agents.append(aid)
+                except Exception as e:
+                    print(f"[Controller] 下发命令到 Agent {aid} 失败: {e}")
+
+    if sent_agents:
+        print(f"[Controller] 命令 '{cmd}' 已下发到 Agent(s): {', '.join(sent_agents)}")
+    else:
+        print("[Controller] 未找到可用 Agent 发送命令")
+
 async def handle_ui(ws):
     ui_clients.add(ws)
+    await broadcast_ui_client_count()  # 新增：连接数广播
     print("[Controller] UI 客户端连接")
     try:
-        # 发送全量快照
         async with agents_lock:
             now = time.time()
-            snapshot = {"type":"full_snapshot","agents":[agent_info(aid,v,now) for aid,v in agents.items()]}
+            snapshot = {"type": "full_snapshot",
+                        "agents": [agent_info(aid, v, now) for aid, v in agents.items()]}
         await ws.send(json.dumps(snapshot))
 
         async for msg in ws:
-            try: data = json.loads(msg)
-            except: continue
+            try:
+                data = json.loads(msg)
+            except:
+                continue
 
-            # 执行命令
-            if data.get("type")=="exec" and data.get("auth")==AUTH_TOKEN:
-                cmd = data.get("cmd")
-                targets = data.get("agents") or []
-                async with agents_lock:
-                    for aid in targets:
-                        a = agents.get(aid)
-                        if a and a.get("ws"):
-                            try: 
-                                await a["ws"].send(json.dumps({"type":"exec","cmd":cmd,"agents":[aid]}))
-                                print(f"[Controller] 向 Agent {aid} 下发命令: {cmd}")
-                            except: pass
+            if data.get("type") == "exec":
+                await handle_exec_command(data)
 
-            # 删除 agent
-            elif data.get("type")=="remove" and data.get("auth")==AUTH_TOKEN:
+            elif data.get("type") == "remove" and data.get("auth") == AUTH_TOKEN:
                 aid = data.get("agent_id")
                 async with agents_lock:
                     if aid in agents:
                         agents.pop(aid)
                         print(f"[Controller] Agent {aid} 已被删除")
-                        # 通知 UI 移除
-                        await broadcast_ui({"type":"agent_removed","agent_id":aid})
+                        await broadcast_ui({"type": "agent_removed", "agent_id": aid})
 
     except Exception as e:
         print(f"[Controller] UI 异常: {e}")
     finally:
         ui_clients.discard(ws)
+        await broadcast_ui_client_count()  # 新增：断开时也广播
         print("[Controller] UI 客户端断开")
 
 # ---------------- 心跳 ----------------
 async def heartbeat():
+    """纯时间判断在线/离线，不发送 ping"""
     while True:
         now = time.time()
         async with agents_lock:
-            for aid, v in list(agents.items()):
-                # 只要 WebSocket 存在且 last 更新时间在 HEARTBEAT_TIMEOUT 内，就在线
-                online = bool(v.get("ws") and (now - v.get("last",0) < HEARTBEAT_TIMEOUT))
-                if v.get("online") != online:
-                    v["online"] = online
-                    asyncio.create_task(broadcast_ui({"type":"agent_status","agent_id":aid,"online":online}))
-                    print(f"[Heartbeat] Agent {aid} 在线状态更新: {online}")
+            for aid, v in agents.items():
+                last_seen = v.get("last", 0)
+                online_before = v.get("online", True)
+
+                if last_seen and (now - last_seen >= HEARTBEAT_TIMEOUT):
+                    if online_before:
+                        v["online"] = False
+                        asyncio.create_task(broadcast_ui({"type": "agent_status", "agent_id": aid, "online": False}))
+                        print(f"[Heartbeat] Agent {aid} 超过 {HEARTBEAT_TIMEOUT}s 未更新，标记离线")
+                else:
+                    if not online_before:
+                        v["online"] = True
+                        asyncio.create_task(broadcast_ui({"type": "agent_status", "agent_id": aid, "online": True}))
+                        print(f"[Heartbeat] Agent {aid} 收到上报，标记在线")
         await asyncio.sleep(5)
 
 # ---------------- HTTP 前端 ----------------
-class ThreadedHTTP(ThreadingMixIn, HTTPServer): daemon_threads=True
+class ThreadedHTTP(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
 def start_http():
     dir_path = os.path.dirname(os.path.abspath(__file__))
-    ThreadedHTTP(("", HTTP_PORT), lambda *a, **kw: SimpleHTTPRequestHandler(*a, directory=dir_path, **kw)).serve_forever()
+    ThreadedHTTP(("", HTTP_PORT),
+                 lambda *a, **kw: SimpleHTTPRequestHandler(*a, directory=dir_path, **kw)).serve_forever()
     print(f"[Controller] HTTP 前端启动在端口 {HTTP_PORT}")
 
 # ---------------- 主程序 ----------------
 async def main():
-    # 启动 Agent WebSocket 服务
     await websockets.serve(handle_agent, "0.0.0.0", AGENT_PORT)
     print(f"[Controller] Agent server listening on port {AGENT_PORT}")
 
-    # 启动 UI WebSocket 服务
     await websockets.serve(handle_ui, "0.0.0.0", UI_PORT)
     print(f"[Controller] UI server listening on port {UI_PORT}")
 
-    # 启动 HTTP 前端线程
     Thread(target=start_http, daemon=True).start()
-
-    # 启动心跳检测任务
     asyncio.create_task(heartbeat())
 
-    # 保持主线程运行
-    await asyncio.Future()  # 永远阻塞，保持服务运行
+    await asyncio.Future()  # 永远阻塞
 
-if __name__=="__main__":
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
