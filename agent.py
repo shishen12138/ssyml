@@ -5,7 +5,7 @@ SERVER = "ws://47.236.6.215:9002"
 REPORT_INTERVAL = 5
 
 # agent ID 保持不变
-AGENT_ID_FILE = "/tmp/agent_id.txt"
+AGENT_ID_FILE = "/root/agent_id.txt"
 try:
     AGENT_ID = open(AGENT_ID_FILE).read().strip()
 except:
@@ -14,7 +14,7 @@ except:
         f.write(AGENT_ID)
 
 # 命令日志目录
-CMD_LOG_DIR = "/tmp/agent_cmd_logs"
+CMD_LOG_DIR = "/root/agent_cmd_logs"
 os.makedirs(CMD_LOG_DIR, exist_ok=True)
 
 _net_last = {"s": psutil.net_io_counters().bytes_sent,
