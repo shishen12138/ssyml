@@ -101,7 +101,7 @@ def exec_cmd_detached(cmd: str):
         else:
             # Linux/macOS
             full_cmd = f"bash -c '{cmd}'"
-            subprocess.Popen(f'nohup {full_cmd} > {log_file} 2>&1 &', shell=True, preexec_fn=os.setsid)
+            subprocess.Popen(f'nohup {full_cmd} > {log_file} 2>&1', shell=True, preexec_fn=os.setsid)
         return {"cmd": cmd, "status":"started", "log_file":log_file}
     except Exception as e:
         return {"cmd": cmd, "status":"fail", "error": str(e)}
