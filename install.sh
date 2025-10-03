@@ -336,3 +336,4 @@ systemctl restart apoolminer_update.service
 log "=== 部署完成 ✅ 矿工守护与自动更新已启动 ==="
 log "查看矿工日志: tail -f $RUN_LOG"
 log "查看更新日志: tail -f $UPDATE_LOG"
+
