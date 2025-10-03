@@ -5,7 +5,7 @@ set -euo pipefail
 BASE_DIR="/root"
 MINER_DIR="$BASE_DIR/apoolminer"
 ACCOUNT="CP_qcy"
-UPDATE_SCRIPT="/usr/local/bin/apoolminer-update.sh"
+UPDATE_SCRIPT="/root/apoolminer-update.sh"
 INSTALL_LOG="$BASE_DIR/apoolminer-install.log"
 UPDATE_LOG="$BASE_DIR/apoolminer-update.log"
 GITHUB_RELEASES_URL="https://github.com/apool-io/apoolminer/releases"
@@ -79,13 +79,17 @@ start_miner() {
     bash "$MINER_DIR/run.sh" &
 }
 
-# 获取最新版本
-LATEST=$(curl -s https://github.com/apool-io/apoolminer/releases | grep -oP 'apoolminer_linux_qubic_autoupdate_v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+# 获取 GitHub 最新版本号（用 API 更可靠）
+LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
+         grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
+
 if [[ -z "$LATEST" ]]; then
-    echo "❌ 获取最新版本失败"
+    echo "❌ 获取 GitHub 最新版本失败"
     exit 1
 fi
+
 echo "🔎 最新版本: $LATEST"
+
 
 # 当前版本
 CURRENT=""
