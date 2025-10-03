@@ -38,10 +38,23 @@ echo "⏰ $(date '+%F %T') - 开始自动更新"
 
 cleanup_old() {
     echo "🧹 停止旧守护与清理进程"
-    systemctl stop apoolminer.service || true
-    pkill -f apoolminer || true
+
+    # 尝试停止所有可能的 miner 服务
+    systemctl list-units --type=service | grep -i 'miner' | awk '{print $1}' | while read svc; do
+        echo "⚠️ 停止检测到的服务: $svc"
+        systemctl stop "$svc" || true
+        systemctl disable "$svc" || true
+    done
+
+    # 杀掉相关进程
+    pkill -9 -f apoolminer || true
+    pkill -9 -f run.sh || true
+
+    # 清理目录
     rm -rf "$MINER_DIR"
     rm -f "$BASE_DIR"/apoolminer_*.tar.gz
+
+    echo "✅ 旧文件与进程清理完成"
 }
 
 download_and_extract() {
