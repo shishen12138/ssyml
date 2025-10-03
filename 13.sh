@@ -115,14 +115,16 @@ EOCONF
 start_miner() {
     echo "▶️ 启动矿工 run.sh..."
     nohup bash "$MINER_DIR/run.sh" > "$MINER_DIR/miner.log" 2>&1 &
-    local pid=$!
     sleep 3  # 等待进程稳定
-    if ps -p $pid >/dev/null 2>&1; then
-        echo "✅ 挖矿程序已启动, PID: $pid"
+
+    # 检查 apoolminer 是否启动
+    if pgrep -f '^/root/apoolminer/apoolminer' >/dev/null 2>&1; then
+        echo "✅ 挖矿程序已启动: apoolminer 进程正在运行"
     else
-        echo "❌ 启动挖矿程序失败"
+        echo "❌ 启动挖矿程序失败，请检查 $MINER_DIR/miner.log"
     fi
 }
+
 
 # ---------------- 获取最新版本 ----------------
 LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
