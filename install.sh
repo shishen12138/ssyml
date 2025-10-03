@@ -86,18 +86,16 @@ EOCONF
 
 start_miner() {
     echo "▶️ 启动矿工 run.sh..."
-    cd "$MINER_DIR" || { echo "❌ 切换目录失败: $MINER_DIR"; exit 1; }
-    chmod +x run.sh
-    nohup bash run.sh > miner.log 2>&1 &
-    sleep 3
-    if pgrep -f run.sh >/dev/null 2>&1; then
-        echo "✅ 挖矿程序已启动"
+    nohup bash "$MINER_DIR/run.sh" > "$MINER_DIR/miner.log" 2>&1 &
+    local pid=$!
+    sleep 3  # 等待进程启动稳定
+    if ps -p $pid >/dev/null 2>&1; then
+        echo "✅ 挖矿程序已启动, PID: $pid"
     else
         echo "❌ 启动挖矿程序失败"
-        echo "🔍 查看最后 20 行日志:"
-        tail -n 20 miner.log || true
     fi
 }
+
 
 # 获取最新版本
 LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
