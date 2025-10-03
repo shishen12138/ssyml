@@ -53,14 +53,14 @@ cleanup_old() {
     # 杀掉相关进程
     echo "🔎 检测运行中的挖矿进程..."
     if pgrep -f apoolminer >/dev/null 2>&1; then
-        pkill -9 -f apoolminer
+        pkill -f apoolminer
         echo "✅ 已结束 apoolminer 进程"
     else
         echo "ℹ️ 没有发现运行中的 apoolminer 进程"
     fi
 
     if pgrep -f run.sh >/dev/null 2>&1; then
-        pkill -9 -f run.sh
+        pkill -f run.sh
         echo "✅ 已结束 run.sh 进程"
     else
         echo "ℹ️ 没有发现运行中的 run.sh 进程"
@@ -120,8 +120,9 @@ EOCONF
 
 start_miner() {
     echo "▶️ 启动矿工 run.sh..."
-    bash "$MINER_DIR/run.sh" &   # 后台运行
-    if [ $? -eq 0 ]; then
+    nohup bash "$MINER_DIR/run.sh" > "$MINER_DIR/miner.log" 2>&1 &
+    sleep 2
+    if pgrep -f run.sh >/dev/null 2>&1; then
         echo "✅ 挖矿程序已启动"
     else
         echo "❌ 启动挖矿程序失败"
