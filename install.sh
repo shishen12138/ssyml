@@ -128,13 +128,17 @@ start_miner() {
 }
 
 # 获取最新版本
-echo "🔎 获取 GitHub 最新版本号..."
-LATEST=$(curl -s https://github.com/apool-io/apoolminer/releases | grep -oP 'apoolminer_linux_qubic_autoupdate_v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+# 获取 GitHub 最新版本号（用 API 更可靠）
+LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
+         grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
+
 if [[ -z "$LATEST" ]]; then
-    echo "❌ 获取最新版本失败"
+    echo "❌ 获取 GitHub 最新版本失败"
     exit 1
 fi
-echo "✅ 最新版本: $LATEST"
+
+echo "🔎 最新版本: $LATEST"
+
 
 # 当前版本
 CURRENT=""
