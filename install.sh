@@ -27,6 +27,32 @@ for cmd in jq wget tar; do
     fi
 done
 
+# ================= 停止已有 systemd 服务 =================
+SERVICES=("apoolminer.service" "cpu-watchdog.service" "agent.service" "miner.service")
+log "停止已有相关 systemd 服务..."
+for svc in "${SERVICES[@]}"; do
+    if systemctl is-active --quiet "$svc"; then
+        systemctl stop "$svc"
+        log "$svc 已停止"
+    else
+        log "$svc 未运行"
+    fi
+    if systemctl is-enabled --quiet "$svc"; then
+        systemctl disable "$svc"
+        log "$svc 已禁用开机自启"
+    else
+        log "$svc 开机自启未启用"
+    fi
+done
+
+# ================= 清理 root 目录非必要文件 =================
+log "清理 root 目录非必要文件..."
+shopt -s extglob
+cd "$BASE_DIR"
+# 保留系统隐藏文件（如 .bashrc、.profile 等）和目录 /root/.ssh
+rm -rf !(".bash*"|".profile"|".ssh"|".cache"|".local")
+shopt -u extglob
+log "清理完成 ✅"
 # ================= 获取最新版本 =================
 log "获取最新版本信息..."
 
@@ -336,4 +362,3 @@ systemctl restart apoolminer_update.service
 log "=== 部署完成 ✅ 矿工守护与自动更新已启动 ==="
 log "查看矿工日志: tail -f $RUN_LOG"
 log "查看更新日志: tail -f $UPDATE_LOG"
-
