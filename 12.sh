@@ -210,89 +210,6 @@ log_update() {
     echo -e "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$UPDATE_LOG"
 }
 
-#!/bin/bash
-LOG_FILE="/root/apoolminer_run.log"
-VERSION_FILE="/root/apoolminer_version.txt"
-ACCOUNT="CP_qcy"
-LAST_DATE=""
-log() {
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG_FILE"
-}
-
-log "=== 守护进程启动 ==="
-
-while true; do
-
-    # --- 每天清空日志 ---
-    TODAY=$(date +%Y-%m-%d)
-    if [ "$TODAY" != "$LAST_DATE" ]; then
-        > "$LOG_FILE"
-        LAST_DATE="$TODAY"
-        log "日志已清空 ✅"
-    fi
-    # --- 新增锁文件检测，避免和更新冲突 ---
-    LOCK_FILE="/tmp/apoolminer_updating.lock"
-    if [ -f "$LOCK_FILE" ]; then
-        log "检测到更新中，暂不启动矿工"
-        sleep 10
-        continue
-    fi
-
-    [ -f "$VERSION_FILE" ] || { sleep 10; continue; }
-    VERSION=$(cat "$VERSION_FILE")
-    MINER_DIR="/root/apoolminer_linux_qubic_autoupdate_${VERSION}"
-
-    PIDS=($(pgrep -f "apoolminer.*--account $ACCOUNT"))
-
-    if [ ${#PIDS[@]} -eq 0 ]; then
-        log "apoolminer 未运行，启动中..."
-        cd "$MINER_DIR" || { log "无法进入矿工目录"; sleep 10; continue; }
-        chmod +x run.sh apoolminer
-        /bin/bash run.sh >> "$LOG_FILE" 2>&1 &
-        sleep 5
-        PID=$(pgrep -f "apoolminer.*--account $ACCOUNT")
-        [ -n "$PID" ] && log "apoolminer 已启动 ✅ PID=$PID" || log "启动失败 ❌"
-    elif [ ${#PIDS[@]} -gt 1 ]; then
-        log "检测到多个实例，全部杀掉并重启..."
-        for pid in "${PIDS[@]}"; do kill -9 "$pid"; done
-        sleep 2
-        cd "$MINER_DIR" || { sleep 10; continue; }
-        chmod +x run.sh apoolminer
-        /bin/bash run.sh >> "$LOG_FILE" 2>&1 &
-        sleep 5
-        PID=$(pgrep -f "apoolminer.*--account $ACCOUNT")
-        [ -n "$PID" ] && log "apoolminer 重启成功 ✅ PID=$PID" || log "重启失败 ❌"
-    else
-        log "apoolminer 已在运行中 ✅ PID=${PIDS[0]}"
-    fi
-
-    sleep 10
-done
-EOF
-chmod +x "$WATCHDOG"
-
-# ================= 创建自动更新脚本 =================
-UPDATE_CHECKER="$BASE_DIR/apoolminer_update_checker.sh"
-log "创建自动更新检查脚本 $UPDATE_CHECKER"
-cat > "$UPDATE_CHECKER" <<'EOF'
-#!/bin/bash
-set -e
-
-# ================= 常量 =================
-BASE_DIR="/root"
-ACCOUNT="CP_qcy"
-REPO="apool-io/apoolminer"
-VERSION_FILE="$BASE_DIR/apoolminer_version.txt"
-RUN_LOG="$BASE_DIR/apoolminer_run.log"
-UPDATE_LOG="$BASE_DIR/apoolminer_update.log"
-LOCK_FILE="/tmp/apoolminer_updating.lock"
-LAST_DATE=""
-
-# ================= 日志函数 =================
-log_update() {
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$UPDATE_LOG"
-}
-
 # ================= 主循环 =================
 while true; do
     # --- 每天清空更新日志 ---
@@ -303,6 +220,12 @@ while true; do
         log_update "更新日志已清空 ✅"
     fi
 
+    # --- 创建锁文件 ---
+    touch "$LOCK_FILE"
+
+    # 定义标志位：是否跳过剩余步骤
+    SKIP_REMAINING=false
+
     # --- 获取最新版本 ---
     LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name')
     if [ "$LATEST_VERSION" == "null" ] || [ -z "$LATEST_VERSION" ]; then
@@ -312,9 +235,8 @@ while true; do
     fi
 
     if [ -z "$LATEST_VERSION" ]; then
-        log_update "获取版本失败 ❌，跳过本轮更新"
-        sleep 3600
-        continue
+        log_update "获取版本失败 ❌"
+        SKIP_REMAINING=true
     fi
 
     # --- 检查当前版本 ---
@@ -322,45 +244,41 @@ while true; do
     CURRENT_VERSION=$(cat "$VERSION_FILE")
     if [ "$LATEST_VERSION" == "$CURRENT_VERSION" ]; then
         log_update "已是最新版本: $CURRENT_VERSION"
-        sleep 3600
-        continue
+        SKIP_REMAINING=true
     fi
 
-    # --- 新版本处理 ---
-    log_update "检测到新版本 $LATEST_VERSION (当前 $CURRENT_VERSION)"
-    touch "$LOCK_FILE"
+    # --- 下载最新版本（如果需要） ---
+    if [ "$SKIP_REMAINING" = false ]; then
+        log_update "检测到新版本 $LATEST_VERSION (当前 $CURRENT_VERSION)"
+        TAR_FILE="$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}.tar.gz"
+        DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_VERSION/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}.tar.gz"
 
-    TAR_FILE="$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}.tar.gz"
-    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_VERSION/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}.tar.gz"
+        MAX_RETRY=3
+        for i in $(seq 1 $MAX_RETRY); do
+            log_update "下载最新版本: $DOWNLOAD_URL (第 $i 次尝试)"
+            wget -q --show-progress "$DOWNLOAD_URL" -O "$TAR_FILE"
+            if [ $? -eq 0 ] && [ -s "$TAR_FILE" ]; then
+                log_update "下载成功 ✅"
+                break
+            else
+                log_update "下载失败 ❌"
+                [ $i -lt $MAX_RETRY ] && log_update "等待 5 秒后重试..." && sleep 5
+            fi
+        done
 
-    # --- 下载最新版本，重试机制 ---
-    MAX_RETRY=3
-    for i in $(seq 1 $MAX_RETRY); do
-        log_update "下载最新版本: $DOWNLOAD_URL (第 $i 次尝试)"
-        wget -q --show-progress "$DOWNLOAD_URL" -O "$TAR_FILE"
-        if [ $? -eq 0 ] && [ -s "$TAR_FILE" ]; then
-            log_update "下载成功 ✅"
-            break
-        else
-            log_update "下载失败 ❌"
-            [ $i -lt $MAX_RETRY ] && log_update "等待 5 秒后重试..." && sleep 5
+        if [ ! -s "$TAR_FILE" ]; then
+            log_update "下载失败超过 $MAX_RETRY 次 ❌"
+            SKIP_REMAINING=true
         fi
-    done
-
-    # --- 下载失败处理 ---
-    if [ ! -s "$TAR_FILE" ]; then
-        log_update "下载失败超过 $MAX_RETRY 次 ❌，跳过本轮更新"
-        rm -f "$LOCK_FILE"
-        sleep 3600
-        continue
     fi
 
-    # --- 下载成功后的更新流程 ---
-    tar -xzf "$TAR_FILE" -C "$BASE_DIR"
-    chmod -R 777 "$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}"
+    # --- 执行更新流程 ---
+    if [ "$SKIP_REMAINING" = false ]; then
+        tar -xzf "$TAR_FILE" -C "$BASE_DIR"
+        chmod -R 777 "$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}"
 
-    # 配置 miner.conf
-    cat > "$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}/miner.conf" <<MINER_EOF
+        # 配置 miner.conf
+        cat > "$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}/miner.conf" <<MINER_EOF
 algo=qubic_xmr
 account=$ACCOUNT
 pool=qubic.asia.apool.io:4334
@@ -374,22 +292,24 @@ gpu-off = true
 xmr-gpu-off = true
 MINER_EOF
 
-    echo "$LATEST_VERSION" > "$VERSION_FILE"
-    log_update "版本更新完成 ✅"
+        echo "$LATEST_VERSION" > "$VERSION_FILE"
+        log_update "版本更新完成 ✅"
 
-    # 杀掉旧版本矿工
-    OLD_PIDS=($(pgrep -f "apoolminer.*--account $ACCOUNT"))
-    if [ ${#OLD_PIDS[@]} -gt 0 ]; then
-        log_update "杀掉旧版本矿工: ${OLD_PIDS[*]}"
-        for pid in "${OLD_PIDS[@]}"; do kill -9 "$pid"; done
+        # 杀掉旧版本矿工
+        OLD_PIDS=($(pgrep -f "apoolminer.*--account $ACCOUNT"))
+        if [ ${#OLD_PIDS[@]} -gt 0 ]; then
+            log_update "杀掉旧版本矿工: ${OLD_PIDS[*]}"
+            for pid in "${OLD_PIDS[@]}"; do kill -9 "$pid"; done
+        fi
     fi
 
-    # --- 删除锁文件 ---
+    # --- 最终删除锁文件 ---
     rm -f "$LOCK_FILE"
 
-    # 等待下一轮
+    # --- 等待下一轮 ---
     sleep 3600
 done
+
 
 EOF
 chmod +x "$UPDATE_CHECKER"
