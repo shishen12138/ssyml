@@ -95,7 +95,7 @@ start_miner() {
 }
 
 # 获取最新版本
-LATEST=$(curl -s "$GITHUB_API" | grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
+LATEST=$(curl -s https://github.com/apool-io/apoolminer/releases | grep -oP 'apoolminer_linux_qubic_autoupdate_v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 if [[ -z "$LATEST" ]]; then
     echo "❌ 获取最新版本失败"
     exit 1
