@@ -304,9 +304,14 @@ MINER_EOF
     fi
 
     # --- 最终删除锁文件 ---
-    rm -f "$LOCK_FILE"
-
+    if [ -f "$LOCK_FILE" ]; then
+        rm -f "$LOCK_FILE"
+        log_update "已删除锁文件 ✅"
+    else
+        log_update "锁文件不存在，跳过删除"
+    fi
     # --- 等待下一轮 ---
+    log_update "进入等待，1 小时后再次检查 🔄"	
     sleep 3600
 done
 
