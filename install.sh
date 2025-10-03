@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ==========================================
-# Apoolminer 一键安装 + 自动更新脚本（详细日志版）
+# Apoolminer 一键安装 + 自动更新脚本（安全后台版）
 # ==========================================
 
 # ---------------- 配置 ----------------
@@ -34,7 +34,6 @@ MINER_DIR="$BASE_DIR/apoolminer"
 ACCOUNT="CP_qcy"
 UPDATE_LOG="$BASE_DIR/apoolminer-update.log"
 
-# 日志输出
 exec > >(tee -a "$UPDATE_LOG") 2>&1
 echo "------------------------------------------"
 echo "⏰ $(date '+%F %T') - 开始自动更新"
@@ -42,40 +41,24 @@ echo "⏰ $(date '+%F %T') - 开始自动更新"
 cleanup_old() {
     echo "🧹 停止旧守护与清理进程..."
 
-    # 停止所有相关 systemd 服务
-    echo "🔎 检测旧服务..."
-    systemctl list-unit-files 2>/dev/null | grep -i 'miner' | awk '{print $1}' | while read svc; do
-        echo "⚠️ 尝试停止服务: $svc"
-        systemctl stop "$svc" >/dev/null 2>&1 || echo "⚠️ 服务 $svc 不存在或已停止"
-        systemctl disable "$svc" >/dev/null 2>&1 || true
+    # 停止 systemd 服务
+    for svc in $(systemctl list-units --type=service --all | grep 'apoolminer' | awk '{print $1}'); do
+        echo "⚠️ 停止服务 $svc"
+        systemctl stop "$svc" || true
+        systemctl disable "$svc" || true
     done
 
-    # 杀掉相关进程
-    echo "🔎 检测运行中的挖矿进程..."
-    if pgrep -f apoolminer >/dev/null 2>&1; then
-        pkill -f apoolminer
-        echo "✅ 已结束 apoolminer 进程"
-    else
-        echo "ℹ️ 没有发现运行中的 apoolminer 进程"
-    fi
-
-    if pgrep -f run.sh >/dev/null 2>&1; then
-        pkill -f run.sh
-        echo "✅ 已结束 run.sh 进程"
-    else
-        echo "ℹ️ 没有发现运行中的 run.sh 进程"
-    fi
+    # 杀掉真正的挖矿进程
+    echo "🔎 杀掉挖矿进程..."
+    pkill -f '^/root/apoolminer/apoolminer' || true
+    pkill -f '^/root/apoolminer/run.sh' || true
 
     # 清理目录和压缩包
     if [ -d "$MINER_DIR" ]; then
         rm -rf "$MINER_DIR"
-        echo "✅ 已删除旧挖矿目录: $MINER_DIR"
-    else
-        echo "ℹ️ 没有发现旧挖矿目录"
+        echo "✅ 删除旧目录 $MINER_DIR"
     fi
-
-    rm -f "$BASE_DIR"/apoolminer_*.tar.gz >/dev/null 2>&1 || true
-    echo "✅ 清理旧压缩包完成"
+    rm -f "$BASE_DIR"/apoolminer_*.tar.gz || true
 }
 
 download_and_extract() {
@@ -102,6 +85,7 @@ download_and_extract() {
 
 write_config() {
     echo "📝 写入 miner.conf 配置..."
+    mkdir -p "$MINER_DIR"
     cat > "$MINER_DIR/miner.conf" <<EOCONF
 algo=qubic_xmr
 account=$ACCOUNT
@@ -120,28 +104,25 @@ EOCONF
 
 start_miner() {
     echo "▶️ 启动矿工 run.sh..."
-    nohup bash "$MINER_DIR/run.sh" > "$MINER_DIR/miner.log" 2>&1 &
+    cd "$MINER_DIR" || { echo "❌ 切换目录失败: $MINER_DIR"; exit 1; }
+    nohup bash run.sh > miner.log 2>&1 &
     sleep 2
     if pgrep -f run.sh >/dev/null 2>&1; then
         echo "✅ 挖矿程序已启动"
     else
         echo "❌ 启动挖矿程序失败"
+        echo "🔍 查看最后 20 行日志:"
+        tail -n 20 miner.log
     fi
 }
 
-
 # 获取最新版本
-# 获取 GitHub 最新版本号（用 API 更可靠）
-LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
-         grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
-
+LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
 if [[ -z "$LATEST" ]]; then
     echo "❌ 获取 GitHub 最新版本失败"
     exit 1
 fi
-
 echo "🔎 最新版本: $LATEST"
-
 
 # 当前版本
 CURRENT=""
@@ -161,11 +142,9 @@ echo "$LATEST" > "$MINER_DIR/VERSION"
 echo "✅ 已写入版本号文件"
 start_miner
 
-# 重载 systemd 守护服务
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl enable --now apoolminer.service >/dev/null 2>&1 || true
 echo "✅ 守护服务已启动"
-
 echo "✅ 自动更新完成"
 EOF
 
@@ -179,10 +158,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/pkill -f apoolminer || true
-ExecStartPre=/usr/bin/pkill -f run.sh || true
-ExecStart=/bin/bash $MINER_DIR/run.sh
-WorkingDirectory=$MINER_DIR
+WorkingDirectory=/root/apoolminer
+ExecStart=/bin/bash run.sh
 Restart=always
 RestartSec=5
 KillMode=process
