@@ -1,14 +1,17 @@
 #!/bin/bash
-set -euo pipefail
+
+# ==========================================
+# Apoolminer 一键安装 + 自动更新脚本
+# ==========================================
 
 # ---------------- 配置 ----------------
 BASE_DIR="/root"
 MINER_DIR="$BASE_DIR/apoolminer"
 ACCOUNT="CP_qcy"
-UPDATE_SCRIPT="/root/apoolminer-update.sh"
+UPDATE_SCRIPT="$BASE_DIR/apoolminer-update.sh"
 INSTALL_LOG="$BASE_DIR/apoolminer-install.log"
 UPDATE_LOG="$BASE_DIR/apoolminer-update.log"
-GITHUB_RELEASES_URL="https://github.com/apool-io/apoolminer/releases"
+GITHUB_API="https://api.github.com/repos/apool-io/apoolminer/releases/latest"
 
 # 输出安装日志
 exec > >(tee -a "$INSTALL_LOG") 2>&1
@@ -24,14 +27,13 @@ echo "=========================================="
 # ---------------- 写自动更新脚本 ----------------
 cat > "$UPDATE_SCRIPT" <<'EOF'
 #!/bin/bash
-set -euo pipefail
 
 BASE_DIR="/root"
 MINER_DIR="$BASE_DIR/apoolminer"
 ACCOUNT="CP_qcy"
 UPDATE_LOG="$BASE_DIR/apoolminer-update.log"
 
-# 日志输出
+# 输出日志
 exec > >(tee -a "$UPDATE_LOG") 2>&1
 echo "------------------------------------------"
 echo "⏰ $(date '+%F %T') - 开始自动更新"
@@ -40,19 +42,19 @@ cleanup_old() {
     echo "🧹 停止旧守护与清理进程"
 
     # 停掉所有可能的 miner 服务
-    systemctl list-unit-files | grep -i 'miner' | awk '{print $1}' | while read svc; do
+    systemctl list-unit-files 2>/dev/null | grep -i 'miner' | awk '{print $1}' | while read svc; do
         echo "⚠️ 停止检测到的服务: $svc"
-        systemctl stop "$svc" || true
-        systemctl disable "$svc" || true
+        systemctl stop "$svc" >/dev/null 2>&1 || true
+        systemctl disable "$svc" >/dev/null 2>&1 || true
     done
 
-    # 强制杀掉进程（无论如何都不会报错退出）
-    pkill -9 -f apoolminer || true
-    pkill -9 -f run.sh || true
+    # 杀掉相关进程
+    pkill -9 -f apoolminer >/dev/null 2>&1 || true
+    pkill -9 -f run.sh >/dev/null 2>&1 || true
 
-    # 清理目录
-    rm -rf "$MINER_DIR" || true
-    rm -f "$BASE_DIR"/apoolminer_*.tar.gz || true
+    # 清理目录和压缩包
+    rm -rf "$MINER_DIR" >/dev/null 2>&1 || true
+    rm -f "$BASE_DIR"/apoolminer_*.tar.gz >/dev/null 2>&1 || true
 
     echo "✅ 旧文件与进程清理完成"
 }
@@ -92,17 +94,13 @@ start_miner() {
     bash "$MINER_DIR/run.sh" &
 }
 
-# 获取 GitHub 最新版本号（用 API 更可靠）
-LATEST=$(curl -s https://api.github.com/repos/apool-io/apoolminer/releases/latest | \
-         grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
-
+# 获取最新版本
+LATEST=$(curl -s "$GITHUB_API" | grep '"tag_name":' | cut -d'"' -f4 | sed 's/^v//')
 if [[ -z "$LATEST" ]]; then
-    echo "❌ 获取 GitHub 最新版本失败"
+    echo "❌ 获取最新版本失败"
     exit 1
 fi
-
 echo "🔎 最新版本: $LATEST"
-
 
 # 当前版本
 CURRENT=""
@@ -120,9 +118,9 @@ write_config
 echo "$LATEST" > "$MINER_DIR/VERSION"
 start_miner
 
-# 重启守护服务
-systemctl daemon-reload
-systemctl enable --now apoolminer.service
+# 重载守护服务（如果 systemd 服务存在）
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl enable --now apoolminer.service >/dev/null 2>&1 || true
 
 echo "✅ 自动更新完成"
 EOF
@@ -174,9 +172,9 @@ echo "⬇️ 执行首次安装/更新..."
 $UPDATE_SCRIPT
 
 # ---------------- 启动服务与定时器 ----------------
-systemctl daemon-reload
-systemctl enable --now apoolminer.service
-systemctl enable --now apoolminer-update.timer
+systemctl daemon-reload || true
+systemctl enable --now apoolminer.service >/dev/null 2>&1 || true
+systemctl enable --now apoolminer-update.timer >/dev/null 2>&1 || true
 
 echo "=========================================="
 echo "✅ Apoolminer 安装完成并已启动"
