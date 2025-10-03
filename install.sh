@@ -120,12 +120,14 @@ EOCONF
 
 start_miner() {
     echo "▶️ 启动矿工 run.sh..."
-    if bash "$MINER_DIR/run.sh" &; then
+    bash "$MINER_DIR/run.sh" &   # 后台运行
+    if [ $? -eq 0 ]; then
         echo "✅ 挖矿程序已启动"
     else
         echo "❌ 启动挖矿程序失败"
     fi
 }
+
 
 # 获取最新版本
 # 获取 GitHub 最新版本号（用 API 更可靠）
