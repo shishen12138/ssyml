@@ -28,7 +28,6 @@ EC2_STATE_CN = {
 }
 
 EC2_IGNORE_STATES = ["terminated"]
-
 US_REGIONS = ["us-east-1","us-east-2","us-west-1","us-west-2"]
 
 # -------------------- 主程序 --------------------
@@ -178,7 +177,11 @@ class AWSCheckerGUI:
 
     # -------------------- Treeview 插入 --------------------
     def insert_tree(self, row):
-        self.root.after(0, lambda: self.tree.insert("", tk.END, values=row))
+        self.root.after(0, lambda: self._insert_and_update_stats(row))
+
+    def _insert_and_update_stats(self, row):
+        self.tree.insert("", tk.END, values=row)
+        self.update_stats()  # 每次新增实例立即更新统计
 
     # -------------------- CPU刷新循环 --------------------
     def cpu_refresh_loop(self):
@@ -191,8 +194,7 @@ class AWSCheckerGUI:
             for idx, inst in enumerate(list(self.instances_to_check)):
                 futures.append(self.pool_cpu.submit(self.update_cpu_top_for_instance, idx, inst))
             for f in futures:
-                f.result()  # 等待一轮完成
-            self.update_stats()
+                f.result()
             self.root.after(0, lambda: self.status_var.set("CPU/Top1信息更新完成"))
             time.sleep(5)
 
@@ -206,6 +208,7 @@ class AWSCheckerGUI:
             iid = self.tree.get_children()[idx]
             self.tree.set(iid,"Top1进程",top_proc)
             self.tree.set(iid,"CPU使用率",cpu)
+            self.update_stats()  # CPU更新后立即刷新统计
         except:
             pass
 
@@ -283,7 +286,7 @@ class AWSCheckerGUI:
 
     def _update_ssh_status(self, iid, status):
         self.root.after(0, lambda: self.tree.set(iid, "SSH状态", status))
-
+        self.update_stats()  # SSH状态更新时也刷新统计
 
 if __name__=="__main__":
     root=tk.Tk()
