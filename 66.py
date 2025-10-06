@@ -175,12 +175,19 @@ class AWSManagerApp:
                 self.tree.item(item, tags=tuple(current_tags))
 
     def search_instance(self):
+
+        def clean_text(s):
+            """只保留字母和数字"""
+            return ''.join(c for c in s if c.isalnum()) if s else ''
+
         search_text = self.search_entry.get().strip()
         search_field = self.search_field.get()
 
         if not search_text:
             messagebox.showwarning("警告", "请输入搜索内容！")
             return
+
+        search_text_clean = clean_text(search_text)
 
         # 清除所有先前的搜索高亮
         self.clear_highlight()
@@ -190,25 +197,27 @@ class AWSManagerApp:
             values = self.tree.item(item, "values")
             if not values:
                 continue
-            instance_id = values[0]
-            ip_address = values[1]
-            private_ip = values[2]
 
-            if search_field == "Instance ID" and instance_id == search_text:
+            instance_id = clean_text(values[0])
+            ip_address = clean_text(values[1])
+            private_ip = clean_text(values[2])
+
+            if search_field == "Instance ID" and search_text_clean in instance_id:
                 self.highlight_and_scroll(item)
                 found_match = True
                 break
-            elif search_field == "IP Address" and ip_address == search_text:
+            elif search_field == "IP Address" and search_text_clean in ip_address:
                 self.highlight_and_scroll(item)
                 found_match = True
                 break
-            elif search_field == "Private IP" and private_ip == search_text:
+            elif search_field == "Private IP" and search_text_clean in private_ip:
                 self.highlight_and_scroll(item)
                 found_match = True
                 break
 
         if not found_match:
             messagebox.showwarning("未找到", f"未找到符合条件的实例。")
+
 
     def highlight_and_scroll(self, item):
         self.tree.selection_set(item)
@@ -419,30 +428,37 @@ class AWSManagerApp:
         """
         def fetch_and_update():
             ssh = None
+            # 使用新的局部变量，避免闭包作用域问题
+            current_ip = ip_address if ip_address != "无" else ""
+            current_private_ip = private_ip if private_ip != "无" else ""
+            email = aws_keys.split("----")[0].strip() if aws_keys and "----" in aws_keys else aws_keys
+
             try:
-                email = aws_keys.split("----")[0].strip() if aws_keys and "----" in aws_keys else aws_keys
-                if not ip_address or ip_address == "无":
+                if not current_ip:
                     # 无公网 IP，不做 SSH 检测，但仍在 Treeview 中显示 email
                     self.root.after(0, self.update_instance_in_list,
-                                    instance_id, ip_address if ip_address != "无" else "", private_ip if private_ip != "无" else "", region_name,
+                                    instance_id, "", current_private_ip, region_name,
                                     None, None, None, None, email)
                     return
 
-                ssh, conn_info = self.connect_with_fallback(ip_address, "root", "Qcy1994@06")
+                ssh, conn_info = self.connect_with_fallback(current_ip, "root", "Qcy1994@06")
                 if not ssh:
                     raise Exception("SSH连接失败")
+
                 self.root.after(0, self.log_box.insert, tk.END, f"[{instance_id}] {conn_info}\n")
                 self.root.after(0, self.log_box.yview_moveto, 1)
-                # ✅ 1. 获取当前服务器的真实外网 IP
+
+                # 获取当前服务器的真实外网 IP
                 stdin, stdout, stderr = ssh.exec_command(
-                "curl -s https://checkip.amazonaws.com || curl -s ifconfig.me || wget -qO- https://api.ipify.org"
+                    "curl -s https://checkip.amazonaws.com || curl -s ifconfig.me || wget -qO- https://api.ipify.org"
                 )
                 real_ip = stdout.read().decode().strip()
                 if real_ip:
-                    ip_address = real_ip  # 更新最新外网 IP
+                    current_ip = real_ip
                 else:
                     real_ip_err = stderr.read().decode().strip()
                     self.root.after(0, self.log_box.insert, tk.END, f"[{instance_id}] 获取外网IP失败: {real_ip_err}\n")
+
                 # 获取 CPU 使用率
                 stdin, stdout, stderr = ssh.exec_command(r"top -bn1 | grep '%Cpu'")
                 cpu_output = stdout.read().decode().strip()
@@ -469,7 +485,9 @@ class AWSManagerApp:
                 top1_process_output = stdout.read().decode().strip()
                 top1_process = "无"
                 if top1_process_output:
-                    top1_process = top1_process_output.split()[10]
+                    parts = top1_process_output.split()
+                    if len(parts) >= 11:
+                        top1_process = parts[10]
 
                 # 检测 miner 版本
                 stdin, stdout, stderr = ssh.exec_command("basename /root/apoolminer_linux_qubic_autoupdate_v3.3.0")
@@ -481,37 +499,30 @@ class AWSManagerApp:
                     else:
                         miner_version = miner_path
 
-                # 把 email 放到最后一列
+                # 更新 Treeview
                 self.root.after(0, self.update_instance_in_list,
-                                instance_id, ip_address, private_ip, region_name,
+                                instance_id, current_ip, current_private_ip, region_name,
                                 cpu_usage, memory_usage, top1_process, miner_version, email)
 
-                ssh.close()
-
             except Exception as e:
-                # 记录并在 Treeview 中仍显示 email（如果有）
-                try:
-                    email = aws_keys.split("----")[0].strip() if aws_keys and "----" in aws_keys else aws_keys
-                except Exception:
-                    email = aws_keys
                 self.root.after(0, self.log_box.insert, tk.END,
                                 f"账号 {email} - 无法连接实例 {instance_id}: {e}\n")
                 self.root.after(0, self.log_box.yview_moveto, 1)
                 # 仍更新 email（即使无法 SSH）
                 self.root.after(0, self.update_instance_in_list,
-                                instance_id, ip_address if ip_address != "无" else "", private_ip if private_ip != "无" else "", region_name,
+                                instance_id, current_ip, current_private_ip, region_name,
                                 None, None, None, None, email)
             finally:
                 if ssh:
                     ssh.close()
 
-                # 如果没有暂停，则一分钟后再次检查这个实例（周期性）
+                # 如果没有暂停，则周期性检查
                 if not self.is_paused:
-                    # 通过 pool_3 继续周期性检查：注意传回最新 aws_keys
                     pool_3.submit(fetch_and_update)
 
         # 首次立即提交一次检查
         pool_3.submit(fetch_and_update)
+
 
     def add_instance_to_list(self, instance_id, ip_address, private_ip, region_name, aws_keys, cpu_usage="N/A", memory_usage="N/A", top1_process="N/A", miner_version="N/A"):
         # 显示 email（从 aws_keys 里拆）
@@ -576,9 +587,10 @@ class AWSManagerApp:
         new_ip, new_private_ip = self.fetch_instance_ip(instance_id, aws_keys, region_fixed)
 
         if new_ip:
+            with self.instance_data_lock:
             # 更新内存数据
-            self.instance_data[idx]["IP Address"] = new_ip
-            self.instance_data[idx]["Private IP"] = new_private_ip or ""
+                self.instance_data[idx]["IP Address"] = new_ip
+                self.instance_data[idx]["Private IP"] = new_private_ip or ""
 
             # 回到主线程更新 Treeview
             def update_ui():
@@ -909,3 +921,4 @@ class AWSManagerApp:
 root = tk.Tk()
 app = AWSManagerApp(root)
 root.mainloop()
+
