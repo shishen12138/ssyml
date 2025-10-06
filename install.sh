@@ -111,7 +111,7 @@ log "配置 miner.conf"
 cat > "$MINER_DIR/miner.conf" <<EOF
 algo=qubic_xmr
 account=$ACCOUNT
-pool=qubic.asia.apool.io:4334
+pool=xmr.asia.apool.io:4334
 
 cpu-off = false
 xmr-cpu-off = false
