@@ -27,7 +27,12 @@ class AWSManagerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AWS 管理程序")
+        # 初始化字典来存储可以通过邮箱查找的 AWS 密钥
+        self.aws_keys_dict = {}  # 存储 email -> (access_key, secret_key)
 
+        self.search_matches = []  # 存储所有匹配项
+        self.current_match_index = -1  # 当前显示的匹配项索引
+        
         # 存储已处理的 AWS Key（通过集合去重）
         self.aws_keys_set = set()
 
@@ -43,11 +48,18 @@ class AWSManagerApp:
             f.write(f"批量 SSH 日志 {self.ssh_log_file} 开始记录\n")
         
 
+
         # 设置窗口自适应
         for i in range(16):
             weight = 3 if i in [1, 8, 9] else 1
             self.root.grid_rowconfigure(i, weight=weight)
+
+        # 增加对列配置的调整，确保底部按钮显示完整
         self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(4, weight=1)  # 让第4列自适应
+        self.root.grid_columnconfigure(5, weight=1)  # 让第5列自适应
+        self.root.grid_columnconfigure(6, weight=1)  # 让第6列自适应
+        self.root.grid_columnconfigure(7, weight=1)  # 让第7列自适应
 
         # AWS Key 输入框（改为 Text 组件，支持多行和滚动）
         self.key_label = tk.Label(root, text="请输入AWS Key（格式：email----access----secret，多个账号每行一个）")
@@ -158,8 +170,13 @@ class AWSManagerApp:
         self.search_button = tk.Button(self.bottom_button_frame, text="搜索", command=self.search_instance)
         self.search_button.grid(row=0, column=7, padx=10, sticky="ew")
 
+        # 导出内网IP按钮
+        self.export_ips_button = tk.Button(self.bottom_button_frame, text="导出内网IP", command=self.export_private_ips_with_public_ip)
+        self.export_ips_button.grid(row=0, column=8, padx=10, pady=5, sticky="ew")
+        
         # 标签样式
         self.apply_tags()
+
 
     def set_latest_version(self):
         self.latest_version = self.version_entry.get().strip()
@@ -167,6 +184,7 @@ class AWSManagerApp:
         self.log_box.yview_moveto(1)
 
     def clear_highlight(self):
+        """清除所有搜索高亮"""
         for item in self.tree.get_children():
             # 移除所有的 search_result 标签
             current_tags = list(self.tree.item(item, "tags"))
@@ -175,7 +193,8 @@ class AWSManagerApp:
                 self.tree.item(item, tags=tuple(current_tags))
 
     def search_instance(self):
-
+        """搜索实例并高亮显示匹配项"""
+        
         def clean_text(s):
             """只保留字母和数字"""
             return ''.join(c for c in s if c.isalnum()) if s else ''
@@ -192,7 +211,11 @@ class AWSManagerApp:
         # 清除所有先前的搜索高亮
         self.clear_highlight()
 
-        found_match = False
+        # 重置匹配项列表和当前索引
+        self.search_matches = []
+        self.current_match_index = -1
+
+        # 搜索所有项
         for item in self.tree.get_children():
             values = self.tree.item(item, "values")
             if not values:
@@ -202,33 +225,44 @@ class AWSManagerApp:
             ip_address = clean_text(values[1])
             private_ip = clean_text(values[2])
 
+            # 按照搜索字段进行匹配
             if search_field == "Instance ID" and search_text_clean in instance_id:
-                self.highlight_and_scroll(item)
-                found_match = True
-                break
+                self.search_matches.append(item)
             elif search_field == "IP Address" and search_text_clean in ip_address:
-                self.highlight_and_scroll(item)
-                found_match = True
-                break
+                self.search_matches.append(item)
             elif search_field == "Private IP" and search_text_clean in private_ip:
-                self.highlight_and_scroll(item)
-                found_match = True
-                break
+                self.search_matches.append(item)
 
-        if not found_match:
+        if not self.search_matches:
             messagebox.showwarning("未找到", f"未找到符合条件的实例。")
+            return
 
+        # 初次滚动到第一个匹配项
+        self.scroll_to_next_match()
+
+    def scroll_to_next_match(self):
+        """滚动到下一个匹配项"""
+        if not self.search_matches:
+            return
+
+        # 更新当前匹配项的索引
+        self.current_match_index = (self.current_match_index + 1) % len(self.search_matches)
+        next_match = self.search_matches[self.current_match_index]
+
+        # 高亮并滚动到该匹配项
+        self.highlight_and_scroll(next_match)
 
     def highlight_and_scroll(self, item):
-        self.tree.selection_set(item)
-        self.tree.focus(item)
-        self.tree.see(item)
+        """高亮并滚动到指定的实例项"""
+        self.tree.selection_set(item)  # 选中实例
+        self.tree.focus(item)  # 设置焦点
+        self.tree.see(item)  # 滚动到该实例
         # 保留已有标签，附加 search_result
         current_tags = list(self.tree.item(item, "tags"))
         if "search_result" not in current_tags:
             current_tags.append("search_result")
         self.tree.item(item, tags=tuple(current_tags))
-
+        
     def apply_tags(self):
         # 设置标签的样式
         self.tree.tag_configure("no_ip", background="yellow")
@@ -335,8 +369,21 @@ class AWSManagerApp:
         aws_keys_lines = aws_keys_input.splitlines()
         for aws_keys in aws_keys_lines:
             if aws_keys.strip():
+                # 直接存储 AWS 密钥到字典中
                 self.log_box.insert(tk.END, f"正在提交 AWS Key: {aws_keys} 到线程池\n")
                 self.log_box.yview_moveto(1)
+
+                # 存储到字典中，email 作为键，(access_key, secret_key) 作为值
+                aws_keys_parts = aws_keys.strip().split('----')
+                if len(aws_keys_parts) == 3:
+                    email = aws_keys_parts[0]
+                    access_key = aws_keys_parts[1]
+                    secret_key = aws_keys_parts[2]
+
+                    # 将 AWS 密钥直接存储到字典
+                    self.aws_keys_dict[email] = (access_key, secret_key)
+
+                # 提交任务到线程池，传递 email 作为唯一标识
                 pool_1.submit(self.fetch_instances, aws_keys, proxy)
 
         # 启动 IP 重试定时任务（只需调用一次）
@@ -372,40 +419,54 @@ class AWSManagerApp:
             preferred_regions = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
 
             for region_name in preferred_regions:
-                ec2_region = session.client("ec2", region_name=region_name, config=ec2_config)
-                try:
-                    instances = ec2_region.describe_instances()
-                except Exception as e:
-                    self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} - 无法连接区域 {region_name}: {str(e)}\n")
-                    self.root.after(0, self.log_box.yview_moveto, 1)
-                    continue
+                retries = 3  # 最大重试次数
+                attempt = 0
+                success = False
 
-                region_instance_count = 0
-                for reservation in instances.get("Reservations", []):
-                    for instance in reservation.get("Instances", []):
-                        instance_id = instance["InstanceId"]
-                        ip_address = instance.get("PublicIpAddress", "无")
-                        private_ip = instance.get("PrivateIpAddress", "无")
-                        availability_zone = instance["Placement"].get("AvailabilityZone", "无")
-                        # 过滤掉 terminated 实例
-                        state = instance.get("State", {}).get("Name", "").lower()
-                        if state == "terminated":
-                            continue  # 直接跳过，不加入 Treeview
+                while attempt < retries and not success:
+                    try:
+                        ec2_region = session.client("ec2", region_name=region_name, config=ec2_config)
+                        instances = ec2_region.describe_instances()
+                        success = True  # 成功连接后设置为 True
+                    except Exception as e:
+                        attempt += 1
+                        if attempt < retries:
+                            self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} - 无法连接区域 {region_name}，正在重试 ({attempt}/{retries})：{str(e)}\n")
+                            self.root.after(0, self.log_box.yview_moveto, 1)
+                            time.sleep(5)  # 等待 5 秒后重试
+                        else:
+                            self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} - 无法连接区域 {region_name}，已达到最大重试次数：{str(e)}\n")
+                            self.root.after(0, self.log_box.yview_moveto, 1)
+                            continue
 
-                        if (aws_keys, instance_id) not in added_instances:
-                            added_instances.add((aws_keys, instance_id))
-                            region_instance_count += 1
-                            total_instance_count += 1
+                    # 如果成功连接并获取实例信息
+                    if success:
+                        region_instance_count = 0
+                        for reservation in instances.get("Reservations", []):
+                            for instance in reservation.get("Instances", []):
+                                instance_id = instance["InstanceId"]
+                                ip_address = instance.get("PublicIpAddress", "无")
+                                private_ip = instance.get("PrivateIpAddress", "无")
+                                availability_zone = instance["Placement"].get("AvailabilityZone", "无")
+                                # 过滤掉 terminated 实例
+                                state = instance.get("State", {}).get("Name", "").lower()
+                                if state == "terminated":
+                                    continue  # 直接跳过，不加入 Treeview
 
-                            # 提交线程池获取 CPU/内存/Top1（把 aws_keys 也传进去）
-                            pool_3.submit(self.fetch_instance_details, instance_id, ip_address, private_ip, availability_zone, aws_keys)
+                                if (aws_keys, instance_id) not in added_instances:
+                                    added_instances.add((aws_keys, instance_id))
+                                    region_instance_count += 1
+                                    total_instance_count += 1
 
-                            # 更新 Treeview（主线程）
-                            self.root.after(0, self.add_instance_to_list, instance_id, ip_address, private_ip, availability_zone, aws_keys)
+                                    # 提交线程池获取 CPU/内存/Top1（把 aws_keys 也传进去）
+                                    pool_3.submit(self.fetch_instance_details, instance_id, ip_address, private_ip, availability_zone, aws_keys)
 
-                if region_instance_count > 0:
-                    self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} 区域 {region_name} 获取到 {region_instance_count} 个实例\n")
-                    self.root.after(0, self.log_box.yview_moveto, 1)
+                                    # 更新 Treeview（主线程）
+                                    self.root.after(0, self.add_instance_to_list, instance_id, ip_address, private_ip, availability_zone, aws_keys)
+
+                        if region_instance_count > 0:
+                            self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} 区域 {region_name} 获取到 {region_instance_count} 个实例\n")
+                            self.root.after(0, self.log_box.yview_moveto, 1)
 
             if total_instance_count == 0:
                 self.root.after(0, self.log_box.insert, tk.END, f"账号 {email} 在首选区域未获取到任何实例\n")
@@ -420,6 +481,7 @@ class AWSManagerApp:
         except Exception as e:
             self.root.after(0, self.log_box.insert, tk.END, f"账号 {aws_keys} - 错误: {str(e)}\n")
             self.root.after(0, self.log_box.yview_moveto, 1)
+
 
     def fetch_instance_details(self, instance_id, ip_address, private_ip, region_name, aws_keys):
         """
@@ -636,6 +698,95 @@ class AWSManagerApp:
             self.root.after(0, self.log_box.yview_moveto, 1)
         return None, None
         
+    def export_private_ips_with_public_ip(self):
+        file_path = r"C:\Users\Administrator\Desktop\my_ips.txt"
+        duplicate_file_path = r"C:\Users\Administrator\Desktop\my_ips1.txt"
+        ip_count = {}  # 用字典统计每个 IP 的出现次数
+        ip_data = {}   # 用字典存储每个 IP 的详细信息
+        exported_count = 0
+        duplicate_count = 0
+
+        try:
+            # 遍历所有的 treeview 数据，进行统计
+            for item in self.tree.get_children():
+                values = self.tree.item(item, "values")
+                public_ip = values[1].strip()  # 外网 IP
+                private_ip = values[2].strip()  # 内网 IP
+                instance_id = values[0].strip()  # 实例 ID
+                region_name = values[3].strip()  # 区域信息
+                cpu_usage = values[6].strip() if values[6] != "N/A" else None  # CPU 使用率
+                memory_usage = values[7].strip() if values[7] != "N/A" else None  # 内存使用率
+                top1_process = values[8].strip()  # 顶级进程
+                miner_version = values[9].strip()  # 矿工版本
+                email = values[10].strip()  # 邮箱
+
+                # 通过 email 获取 access_key 和 secret_key
+                if email in self.aws_keys_dict:
+                    access_key, secret_key = self.aws_keys_dict[email]
+                else:
+                    # 如果没有找到对应的 AWS Key，使用默认值
+                    access_key = "N/A"
+                    secret_key = "N/A"
+
+                # 更新 IP 统计
+                ip_count[private_ip] = ip_count.get(private_ip, 0) + 1
+
+                # 存储每个 IP 的详细信息，增加实例 ID
+                if private_ip not in ip_data:
+                    ip_data[private_ip] = []
+                ip_data[private_ip].append({
+                    "public_ip": public_ip,
+                    "instance_id": instance_id,
+                    "region_name": region_name,
+                    "cpu_usage": cpu_usage,
+                    "memory_usage": memory_usage,
+                    "top1_process": top1_process,
+                    "miner_version": miner_version,
+                    "email": email,
+                    "access_key": access_key,
+                    "secret_key": secret_key
+                })
+
+            # 开始导出数据
+            with open(file_path, "w", encoding="utf-8") as file, open(duplicate_file_path, "w", encoding="utf-8") as duplicate_file:
+                for private_ip, count in ip_count.items():
+                    ip_details = ip_data[private_ip]  # 获取该 IP 的所有详细信息
+
+                    # 如果该 IP 出现 2 次或以上，算为重复，写入重复文件
+                    if count >= 2:
+                        for details in ip_details:
+                            public_ip = details["public_ip"]
+                            instance_id = details["instance_id"]
+                            region_name = details["region_name"]
+                            cpu_usage = details["cpu_usage"]
+                            memory_usage = details["memory_usage"]
+                            top1_process = details["top1_process"]
+                            miner_version = details["miner_version"]
+                            email = details["email"]
+                            access_key = details["access_key"]
+                            secret_key = details["secret_key"]
+
+                            # 写入重复文件，按照要求的格式
+                            duplicate_file.write(f"{email}----{access_key}----{secret_key}----{instance_id}----"
+                                                 f"{region_name}----{public_ip}----{private_ip}----{cpu_usage if cpu_usage else 'N/A'}----"
+                                                 f"{memory_usage if memory_usage else 'N/A'}----{top1_process}----{miner_version}\n")
+                        duplicate_count += count
+                    else:
+                        # 否则只写入内网 IP 到主文件，不写其他详细信息
+                        file.write(f"{private_ip}\n")
+                        exported_count += 1
+
+            # 日志输出
+            self.log_box.insert(tk.END, f"导出完成！共导出 {exported_count} 条内网 IP，文件路径：{file_path}\n")
+            self.log_box.insert(tk.END, f"重复的内网 IP 共 {duplicate_count} 条，已写入文件：{duplicate_file_path}\n")
+            self.log_box.yview_moveto(1)
+
+        except Exception as e:
+            self.log_box.insert(tk.END, f"导出失败: {e}\n")
+            self.log_box.yview_moveto(1)
+
+
+            
     def update_instance_in_list(self, instance_id, ip_address=None, private_ip=None, region_name=None, cpu_usage=None, memory_usage=None, top1_process=None, miner_version=None, email=None):
         # 查找已存在的实例并更新数据
         for item in self.tree.get_children():
