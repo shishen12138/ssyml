@@ -12,7 +12,7 @@ import os
 import socket
 import socks
 from urllib.parse import urlparse
-
+import time
 
 # 设置日志
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -1072,4 +1072,5 @@ class AWSManagerApp:
 root = tk.Tk()
 app = AWSManagerApp(root)
 root.mainloop()
+
 
