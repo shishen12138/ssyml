@@ -1,14 +1,4 @@
 """
-AWS 实例检测面板（汇总 + 弹窗显示详细信息 + 双层线程池 + 中文状态映射 + 全区自动检测可用区）
-功能：
-- 支持批量账号输入（email----ACCESS_KEY----SECRET_KEY）。
-- 外层4线程处理不同账号，内层4线程处理区域。
-- 主面板只显示汇总表：账号、开机区域数、总开机数量、最长运行时长区域及时间。
-- 点击账号弹窗显示详细实例信息：实例ID、区域（英文+中文）、状态（中文映射）、运行时长。
-- 区域选择：美国四区 / 全区（默认全区仅检测账号实际可用区域）。
-- 默认代理连接 AWS。
-- 面板高度自适应。
-
 依赖：pip install boto3
 运行：python aws_instance_checker.py
 """
@@ -82,7 +72,7 @@ STATE_MAP = {
 class AWSInstanceChecker(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("AWS 实例检测面板 - 汇总 + 弹窗详细信息")
+        self.title("AWS 实例检测面板")
         self.geometry("1050x720")
         self.all_results = {}  # 缓存详细数据
         self._build_ui()
@@ -104,7 +94,7 @@ class AWSInstanceChecker(tk.Tk):
         frm_region_choice = ttk.Frame(frm_top)
         frm_region_choice.pack(fill=tk.X, pady=4)
         ttk.Label(frm_region_choice, text="选择区域: ").pack(side=tk.LEFT)
-        self.region_choice_var = tk.StringVar(value='ALL')
+        self.region_choice_var = tk.StringVar(value='USA')
         ttk.Radiobutton(frm_region_choice, text="美国四区", variable=self.region_choice_var, value='USA').pack(side=tk.LEFT, padx=6)
         ttk.Radiobutton(frm_region_choice, text="全区（实际可用区）", variable=self.region_choice_var, value='ALL').pack(side=tk.LEFT, padx=6)
 
@@ -150,7 +140,11 @@ class AWSInstanceChecker(tk.Tk):
     def _fetch_region_data(self, acc_email, acc_key, acc_secret, region, region_cn, now_utc):
         details = []
         try:
-            session = boto3.Session(aws_access_key_id=acc_key, aws_secret_access_key=acc_secret, region_name=region)
+            session = boto3.Session(
+                aws_access_key_id=acc_key,
+                aws_secret_access_key=acc_secret,
+                region_name=region
+            )
             ec2 = session.client('ec2')
             paginator = ec2.get_paginator('describe_instances')
             for page in paginator.paginate():
@@ -169,11 +163,29 @@ class AWSInstanceChecker(tk.Tk):
                         d,h = divmod(uptime_min,1440)
                         h,m = divmod(h,60)
                         uptime_str = f"{d}天 {h}小时 {m}分钟" if state=='running' else '0'
-                        details.append({'InstanceId': instance_id, 'Region': f'{region} ({region_cn})', 'State': STATE_MAP.get(state,state), 'Uptime': uptime_str})
+                        details.append({
+                            'InstanceId': instance_id,
+                            'Region': f'{region} ({region_cn})',
+                            'State': STATE_MAP.get(state,state),
+                            'Uptime': uptime_str
+                        })
             return details
         except Exception as e:
-            self._log(f"错误: {acc_email} {region}: {e}")
-            return []
+            msg = str(e)
+            # 判断是否为认证失败
+            if "AuthFailure" in msg or "UnrecognizedClientException" in msg:
+                self._log(f"[{acc_email}] 区域 {region}：认证失败，请检查 Key 或权限 ❌")
+                # 返回统一占位数据，面板显示“请检查 Key 或权限”
+                details.append({
+                    'InstanceId': '请检查 Key 或权限',
+                    'Region': f'{region} ({region_cn})',
+                    'State': '请检查 Key 或权限',
+                    'Uptime': '请检查 Key 或权限'
+                })
+            else:
+                self._log(f"[{acc_email}] 区域 {region}：{msg}")
+            return details
+
 
     def _get_account_enabled_regions(self, acc_key, acc_secret):
         """获取账号实际可用区域"""
@@ -206,6 +218,17 @@ class AWSInstanceChecker(tk.Tk):
 
     def _update_summary(self, acc_email, details):
         self.all_results[acc_email] = details
+        # 判断是否为认证失败占位
+        if details and all(d.get('State') == '请检查 Key 或权限' for d in details):
+            self.tree_sum.insert('', tk.END, values=(
+                acc_email,  # 账号
+                '请检查 Key 或权限',  # 开机区域数
+                '请检查 Key 或权限',  # 总开机数量
+                '请检查 Key 或权限',  # 最长运行时长区域
+                '请检查 Key 或权限'   # 最长运行时长
+            ))
+            return
+
         regions = set(d['Region'] for d in details if '运行中' in d['State'])
         total_running = sum(1 for d in details if '运行中' in d['State'])
         longest_region,longest_time='无','无'
