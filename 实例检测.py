@@ -95,9 +95,12 @@ class AWSInstanceChecker(tk.Tk):
         frm_region_choice.pack(fill=tk.X, pady=4)
         ttk.Label(frm_region_choice, text="选择区域: ").pack(side=tk.LEFT)
         self.region_choice_var = tk.StringVar(value='USA')
-        ttk.Radiobutton(frm_region_choice, text="美国四区", variable=self.region_choice_var, value='USA').pack(side=tk.LEFT, padx=6)
-        ttk.Radiobutton(frm_region_choice, text="全区（实际可用区）", variable=self.region_choice_var, value='ALL').pack(side=tk.LEFT, padx=6)
+        ttk.Radiobutton(frm_region_choice, text="美国四区", variable=self.region_choice_var, value='USA', command=self._update_counts_label).pack(side=tk.LEFT, padx=6)
+        ttk.Radiobutton(frm_region_choice, text="全区（实际可用区）", variable=self.region_choice_var, value='ALL', command=self._update_counts_label).pack(side=tk.LEFT, padx=6)
 
+        # 实例统计显示
+        self.lbl_counts = ttk.Label(frm_region_choice, text="总实例: 0 | 运行中: 0 | 关机: 0 | 已删除: 0")
+        self.lbl_counts.pack(side=tk.LEFT, padx=20)
         frm_ops = ttk.Frame(self)
         frm_ops.pack(fill=tk.X, padx=8, pady=6)
 
@@ -115,9 +118,9 @@ class AWSInstanceChecker(tk.Tk):
         frame_summary = ttk.Frame(paned)
         paned.add(frame_summary, weight=3)
 
-        columns_sum = ("account", "region_count", "total_running", "longest_region", "longest_time")
+        columns_sum = ("account", "region_count", "total_running", "stopped_count", "longest_time")
         self.tree_sum = ttk.Treeview(frame_summary, columns=columns_sum, show='headings')
-        for col, text, width in zip(columns_sum, ["账号", "开机区域数", "总开机数量", "最长运行时长区域", "最长运行时长"], [220, 160, 130, 180, 200]):
+        for col, text, width in zip(columns_sum, ["账号", "开机区域数", "总开机数量", "关机数量", "最长运行时长"], [220, 160, 130, 180, 200]):
             self.tree_sum.heading(col, text=text)
             self.tree_sum.column(col, width=width, anchor=tk.CENTER)
         self.tree_sum.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
@@ -186,6 +189,22 @@ class AWSInstanceChecker(tk.Tk):
                 self._log(f"[{acc_email}] 区域 {region}：{msg}")
             return details
 
+    def _update_counts_label(self):
+        """更新总实例数、运行中、关机、删除统计"""
+        total = running = stopped = terminated = 0
+        for acc_details in self.all_results.values():
+            for d in acc_details:
+                state = d.get('State', '')
+                if state == '请检查 Key 或权限':
+                    continue  # 占位数据不计入统计
+                total += 1
+                if '运行中' in state:
+                    running += 1
+                elif '关机' in state:
+                    stopped += 1
+                elif '已删除' in state:
+                    terminated += 1
+        self.lbl_counts.config(text=f"总实例: {total} | 运行中: {running} | 关机: {stopped} | 已删除: {terminated}")
 
     def _get_account_enabled_regions(self, acc_key, acc_secret):
         """获取账号实际可用区域"""
@@ -224,13 +243,14 @@ class AWSInstanceChecker(tk.Tk):
                 acc_email,  # 账号
                 '请检查 Key 或权限',  # 开机区域数
                 '请检查 Key 或权限',  # 总开机数量
-                '请检查 Key 或权限',  # 最长运行时长区域
+                '请检查 Key 或权限',  # 关机数量
                 '请检查 Key 或权限'   # 最长运行时长
             ))
             return
 
         regions = set(d['Region'] for d in details if '运行中' in d['State'])
         total_running = sum(1 for d in details if '运行中' in d['State'])
+        stopped_count = sum(1 for d in details if '关机' in d['State'])
         longest_region,longest_time='无','无'
         max_uptime=-1
         for d in details:
@@ -242,8 +262,10 @@ class AWSInstanceChecker(tk.Tk):
                     max_uptime=mins
                     longest_region=d['Region']
                     longest_time=d['Uptime']
-        self.tree_sum.insert('',tk.END,values=(acc_email,len(regions),total_running,longest_region,longest_time))
-
+        self.tree_sum.insert('',tk.END,values=(acc_email,len(regions),total_running,stopped_count,longest_time))
+        # 账号汇总更新完后刷新统计
+        self._update_counts_label()
+        
     def show_detail_popup(self,event):
         item=self.tree_sum.selection()
         if not item:
