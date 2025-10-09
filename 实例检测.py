@@ -10,7 +10,7 @@ from tkinter import ttk, messagebox, scrolledtext
 import boto3
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import time
 # 美国四区
 REGIONS_USA = [
     ("us-east-1", "美国东部 - 弗吉尼亚"),
@@ -18,6 +18,7 @@ REGIONS_USA = [
     ("us-west-1", "美国西部 - 北加州"),
     ("us-west-2", "美国西部 - 俄勒冈"),
 ]
+
 # 区域中文映射，可根据需要扩展
 REGION_CN_MAP = {
     # 美国
@@ -142,6 +143,7 @@ class AWSInstanceChecker(tk.Tk):
 
     def _fetch_region_data(self, acc_email, acc_key, acc_secret, region, region_cn, now_utc):
         details = []
+        retries = 3  # 最大重试次数
         try:
             session = boto3.Session(
                 aws_access_key_id=acc_key,
@@ -150,11 +152,33 @@ class AWSInstanceChecker(tk.Tk):
             )
             ec2 = session.client('ec2')
             paginator = ec2.get_paginator('describe_instances')
+
+            # 使用分页器进行分页处理
             for page in paginator.paginate():
                 for res in page.get('Reservations', []):
                     for inst in res.get('Instances', []):
                         state = inst.get('State', {}).get('Name', 'unknown')
                         instance_id = inst.get('InstanceId', 'N/A')
+
+                        # 获取内外网 IP
+                        private_ip = inst.get('PrivateIpAddress', 'N/A')
+                        public_ip = inst.get('PublicIpAddress', 'N/A')
+
+                        # 状态标记
+                        state_label = '未知状态'
+                        if state == 'running':
+                            state_label = '运行中'
+                        elif state == 'stopped':
+                            state_label = '关机'
+                        elif state == 'terminated':
+                            state_label = '已删除'
+                        elif state == 'pending':
+                            state_label = '启动中'
+                        elif state == 'shutting-down':
+                            state_label = '关机中'
+                        elif state == 'stopping':
+                            state_label = '停止中'
+
                         uptime_min = 0
                         if state == 'running':
                             lt = inst.get('LaunchTime')
@@ -162,19 +186,29 @@ class AWSInstanceChecker(tk.Tk):
                                 if lt.tzinfo is None:
                                     lt = lt.replace(tzinfo=timezone.utc)
                                 delta = now_utc - lt
-                                uptime_min = delta.days*1440 + delta.seconds//60
-                        d,h = divmod(uptime_min,1440)
-                        h,m = divmod(h,60)
-                        uptime_str = f"{d}天 {h}小时 {m}分钟" if state=='running' else '0'
+                                uptime_min = delta.days * 1440 + delta.seconds // 60
+                        d, h = divmod(uptime_min, 1440)
+                        h, m = divmod(h, 60)
+                        uptime_str = f"{d}天 {h}小时 {m}分钟" if state == 'running' else '0'
+
                         details.append({
                             'InstanceId': instance_id,
                             'Region': f'{region} ({region_cn})',
-                            'State': STATE_MAP.get(state,state),
-                            'Uptime': uptime_str
+                            'State': state_label,  # 使用状态标记
+                            'Uptime': uptime_str,
+                            'PrivateIp': private_ip,
+                            'PublicIp': public_ip
                         })
             return details
+
         except Exception as e:
             msg = str(e)
+            # 重试机制：认证失败、权限问题、或其他 API 错误时，重试
+            if retries > 0:
+                self._log(f"[{acc_email}] 区域 {region}：发生错误 - {msg}，将在 3 秒后重试... (剩余重试次数: {retries})")
+                time.sleep(3)
+                return self._fetch_region_data(acc_email, acc_key, acc_secret, region, region_cn, now_utc, retries - 1)
+
             # 判断是否为认证失败
             if "AuthFailure" in msg or "UnrecognizedClientException" in msg:
                 self._log(f"[{acc_email}] 区域 {region}：认证失败，请检查 Key 或权限 ❌")
@@ -189,22 +223,30 @@ class AWSInstanceChecker(tk.Tk):
                 self._log(f"[{acc_email}] 区域 {region}：{msg}")
             return details
 
+
     def _update_counts_label(self):
-        """更新总实例数、运行中、关机、删除统计"""
         total = running = stopped = terminated = 0
         for acc_details in self.all_results.values():
             for d in acc_details:
                 state = d.get('State', '')
                 if state == '请检查 Key 或权限':
-                    continue  # 占位数据不计入统计
+                    continue
                 total += 1
-                if '运行中' in state:
+
+                # 处理状态：启动中 和 运行中 合并为 运行中
+                if '运行中' in state or '启动中' in state:
                     running += 1
-                elif '关机' in state:
+                # 处理状态：关机中 和 关机 合并为 关机
+                elif '关机' in state or '关机中' in state:
                     stopped += 1
-                elif '已删除' in state:
+                # 处理状态：已删除 和 删除中 合并为 已删除
+                elif '已删除' in state or '删除中' in state:
                     terminated += 1
-        self.lbl_counts.config(text=f"总实例: {total} | 运行中: {running} | 关机: {stopped} | 已删除: {terminated}")
+
+        self.lbl_counts.config(
+            text=f"总实例: {total} | 运行中: {running} | 关机: {stopped} | 已删除: {terminated}"
+        )
+
 
     def _get_account_enabled_regions(self, acc_key, acc_secret):
         """获取账号实际可用区域"""
@@ -237,51 +279,78 @@ class AWSInstanceChecker(tk.Tk):
 
     def _update_summary(self, acc_email, details):
         self.all_results[acc_email] = details
-        # 判断是否为认证失败占位
         if details and all(d.get('State') == '请检查 Key 或权限' for d in details):
             self.tree_sum.insert('', tk.END, values=(
-                acc_email,  # 账号
-                '请检查 Key 或权限',  # 开机区域数
-                '请检查 Key 或权限',  # 总开机数量
-                '请检查 Key 或权限',  # 关机数量
-                '请检查 Key 或权限'   # 最长运行时长
+                acc_email, '请检查 Key 或权限', '请检查 Key 或权限', '请检查 Key 或权限', '请检查 Key 或权限'
             ))
+            self._update_counts_label()
             return
 
-        regions = set(d['Region'] for d in details if '运行中' in d['State'])
-        total_running = sum(1 for d in details if '运行中' in d['State'])
-        stopped_count = sum(1 for d in details if '关机' in d['State'])
-        longest_region,longest_time='无','无'
-        max_uptime=-1
-        for d in details:
-            if '运行中' in d['State']:
+        running_instances = [d for d in details if '运行中' in d['State']]
+        stopped_instances = [d for d in details if '关机' in d['State']]
+        running_regions = set(d['Region'] for d in running_instances)
+        total_running = len(running_instances)
+        stopped_count = len(stopped_instances)
+
+        longest_time = '无'
+        if running_instances:
+            max_uptime = -1
+            for d in running_instances:
                 hms = d['Uptime']
                 parts = hms.split()
-                mins = int(parts[0][:-1])*1440 + int(parts[1][:-2])*60 + int(parts[2][:-2])
-                if mins>max_uptime:
-                    max_uptime=mins
-                    longest_region=d['Region']
-                    longest_time=d['Uptime']
-        self.tree_sum.insert('',tk.END,values=(acc_email,len(regions),total_running,stopped_count,longest_time))
-        # 账号汇总更新完后刷新统计
+                mins = int(parts[0][:-1]) * 1440 + int(parts[1][:-2]) * 60 + int(parts[2][:-2])
+                if mins > max_uptime:
+                    max_uptime = mins
+                    longest_time = d['Uptime']
+
+        self.tree_sum.insert('', tk.END, values=(
+            acc_email,
+            len(running_regions),
+            total_running,
+            stopped_count,
+            longest_time
+        ))
+
         self._update_counts_label()
-        
-    def show_detail_popup(self,event):
-        item=self.tree_sum.selection()
+
+    def show_detail_popup(self, event):
+        item = self.tree_sum.selection()
         if not item:
             return
-        acc_email=self.tree_sum.item(item[0],'values')[0]
-        details=self.all_results.get(acc_email,[])
-        popup=tk.Toplevel(self)
+        acc_email = self.tree_sum.item(item[0], 'values')[0]
+        details = self.all_results.get(acc_email, [])
+        popup = tk.Toplevel(self)
         popup.title(f"账号 {acc_email} 详细信息")
-        popup.geometry("800x500")
-        tree=ttk.Treeview(popup,columns=("InstanceId","Region","State","Uptime"),show='headings')
-        for col,text,width in zip(("InstanceId","Region","State","Uptime"),["实例ID","区域","状态","运行时长"],[200,250,150,200]):
-            tree.heading(col,text=text)
-            tree.column(col,width=width,anchor=tk.CENTER)
-        tree.pack(fill=tk.BOTH,expand=True,padx=6,pady=6)
+        popup.geometry("1000x500")  # 宽度稍微加大
+
+        tree = ttk.Treeview(
+            popup,
+            columns=("InstanceId", "Region", "State", "Uptime", "PrivateIp", "PublicIp"),
+            show='headings'
+        )
+        for col, text, width in zip(
+            ("InstanceId", "Region", "State", "Uptime", "PrivateIp", "PublicIp"),
+            ["实例ID", "区域", "状态", "运行时长", "内网IP", "外网IP"],
+            [150, 250, 120, 150, 150, 150]
+        ):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor=tk.CENTER)
+        tree.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
         for d in details:
-            tree.insert('',tk.END,values=(d['InstanceId'],d['Region'],d['State'],d['Uptime']))
+            # 在这里合并状态字段，将启动中和运行中合并为运行中，关机中和关机合并为关机，已删除和删除中合并为已删除
+            state = d.get('State', '')
+            if '启动中' in state or '运行中' in state:
+                state = '运行中'
+            elif '关机' in state or '关机中' in state:
+                state = '关机'
+            elif '删除' in state or '删除中' in state:
+                state = '已删除'
+
+            tree.insert('', tk.END, values=(
+                d['InstanceId'], d['Region'], state, d['Uptime'],
+                d.get('PrivateIp', 'N/A'), d.get('PublicIp', 'N/A')
+            ))
 
     def _check_instances(self):
         try:
@@ -292,12 +361,12 @@ class AWSInstanceChecker(tk.Tk):
 
             accounts_raw = self.txt_accounts.get('1.0', tk.END).strip()
             if not accounts_raw:
-                messagebox.showwarning("账号未填写","请填写至少一行账号")
+                messagebox.showwarning("账号未填写", "请填写至少一行账号")
                 self.btn_check.config(state=tk.NORMAL)
                 return
 
             # 解析账号，支持三种格式
-            accounts=[]
+            accounts = []
             lines = [line.strip() for line in accounts_raw.splitlines() if line.strip()]
             i = 0
             while i < len(lines):
@@ -309,12 +378,12 @@ class AWSInstanceChecker(tk.Tk):
                         accounts.append((parts[0].strip(), parts[1].strip(), parts[2].strip()))
                     i += 1
                 # 情况2: ACCESS 和 SECRET 分两行，下一行可能是 email
-                elif '@' not in line and i+1 < len(lines):
+                elif '@' not in line and i + 1 < len(lines):
                     access = line
-                    secret = lines[i+1]
+                    secret = lines[i + 1]
                     email = ''
-                    if i+2 < len(lines) and '@' in lines[i+2]:
-                        email = lines[i+2].strip()
+                    if i + 2 < len(lines) and '@' in lines[i + 2]:
+                        email = lines[i + 2].strip()
                         i += 1
                     accounts.append((email, access.strip(), secret.strip()))
                     i += 2
@@ -329,17 +398,17 @@ class AWSInstanceChecker(tk.Tk):
                     i += 1
 
             if not accounts:
-                messagebox.showwarning("账号解析失败","未解析到有效账号")
+                messagebox.showwarning("账号解析失败", "未解析到有效账号")
                 self.btn_check.config(state=tk.NORMAL)
                 return
 
             # 设置代理
             proxy = self.entry_proxy.get().strip()
             if proxy:
-                os.environ['HTTP_PROXY']=proxy
-                os.environ['HTTPS_PROXY']=proxy
-                os.environ['http_proxy']=proxy
-                os.environ['https_proxy']=proxy
+                os.environ['HTTP_PROXY'] = proxy
+                os.environ['HTTPS_PROXY'] = proxy
+                os.environ['http_proxy'] = proxy
+                os.environ['https_proxy'] = proxy
 
             now_utc = datetime.now(timezone.utc)
 
@@ -362,6 +431,6 @@ class AWSInstanceChecker(tk.Tk):
             self.lbl_status.config(text="就绪")
 
 
-if __name__=='__main__':
-    app=AWSInstanceChecker()
+if __name__ == '__main__':
+    app = AWSInstanceChecker()
     app.mainloop()
