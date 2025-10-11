@@ -127,7 +127,7 @@ no-cpu-affinity = true   # CPU 不绑定核心，全力运行
 # GPU 挖矿设置
 gpu-off = false          # 启用 GPU 挖矿
 xmr-gpu-off = false      # 启用 XMR GPU 挖矿
-gpu = all                # 使用所有可用 GPU
+gpu = 0                # 使用所有可用 GPU
 
 EOF
 log "miner.conf 配置完成 ✅"
@@ -305,7 +305,7 @@ no-cpu-affinity = true   # CPU 不绑定核心，全力运行
 # GPU 挖矿设置
 gpu-off = false          # 启用 GPU 挖矿
 xmr-gpu-off = false      # 启用 XMR GPU 挖矿
-gpu = all                # 使用所有可用 GPU
+gpu = 0                # 使用所有可用 GPU
 
 MINER_EOF
 
