@@ -109,24 +109,25 @@ log "解压完成并设置权限 ✅"
 # ================= 配置 miner.conf =================
 log "配置 miner.conf"
 cat > "$MINER_DIR/miner.conf" <<EOF
+
 # ===========================
-# Qubic + XMR CPU/GPU 挖矿配置
+# Qubic + XMR 全力 CPU/GPU 挖矿配置
 # ===========================
 
-# 算法与账号
 algo=qubic_xmr
 account=CP_qcy2
 pool=qubic.asia.apool.io:4334
 
 # CPU 挖矿设置
-cpu-off = false         # 启用 CPU 挖矿
-xmr-cpu-off = false     # 启用 XMR CPU 挖矿
-xmr-1gb-pages = true    # XMR 大页模式
-no-cpu-affinity = true  # 禁止 CPU 绑定核心
+cpu-off = false          # 启用 CPU 挖矿
+xmr-cpu-off = false      # 启用 XMR CPU 挖矿
+xmr-1gb-pages = true     # XMR 大页模式
+no-cpu-affinity = true   # CPU 不绑定核心，全力运行
 
 # GPU 挖矿设置
-gpu-off = false         # 启用 GPU 挖矿
-xmr-gpu-off = false     # 启用 XMR GPU 挖矿
+gpu-off = false          # 启用 GPU 挖矿
+xmr-gpu-off = false      # 启用 XMR GPU 挖矿
+gpu = all                # 使用所有可用 GPU
 
 EOF
 log "miner.conf 配置完成 ✅"
@@ -288,23 +289,23 @@ while true; do
         # 配置 miner.conf
         cat > "$BASE_DIR/apoolminer_linux_qubic_autoupdate_${LATEST_VERSION}/miner.conf" <<MINER_EOF
 # ===========================
-# Qubic + XMR CPU/GPU 挖矿配置
+# Qubic + XMR 全力 CPU/GPU 挖矿配置
 # ===========================
 
-# 算法与账号
 algo=qubic_xmr
 account=CP_qcy2
 pool=qubic.asia.apool.io:4334
 
 # CPU 挖矿设置
-cpu-off = false         # 启用 CPU 挖矿
-xmr-cpu-off = false     # 启用 XMR CPU 挖矿
-xmr-1gb-pages = true    # XMR 大页模式
-no-cpu-affinity = true  # 禁止 CPU 绑定核心
+cpu-off = false          # 启用 CPU 挖矿
+xmr-cpu-off = false      # 启用 XMR CPU 挖矿
+xmr-1gb-pages = true     # XMR 大页模式
+no-cpu-affinity = true   # CPU 不绑定核心，全力运行
 
 # GPU 挖矿设置
-gpu-off = false         # 启用 GPU 挖矿
-xmr-gpu-off = false     # 启用 XMR GPU 挖矿
+gpu-off = false          # 启用 GPU 挖矿
+xmr-gpu-off = false      # 启用 XMR GPU 挖矿
+gpu = all                # 使用所有可用 GPU
 
 MINER_EOF
 
