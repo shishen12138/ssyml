@@ -127,7 +127,7 @@ no-cpu-affinity = true
 # GPU 挖矿设置
 gpu-off = false
 xmr-gpu-off = false
-gpu = 0
+
 EOF
 log "miner.conf 配置完成 ✅"
 
@@ -304,7 +304,7 @@ no-cpu-affinity = true
 # GPU 挖矿设置
 gpu-off = false
 xmr-gpu-off = false
-gpu = 0
+
 
 MINER_EOF
 
